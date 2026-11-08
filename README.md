@@ -9,8 +9,9 @@ Move your Claude Code and Claude Desktop sessions **without losing anything**:
 - to **another computer or operating system**: Linux, macOS, Raspberry Pi; Windows is untested.
 
 It is two [Claude Code skills](https://code.claude.com/docs/en/skills) with reference scripts, so an agent can do
-it for you, and you can run every step yourself. The scripts need Python 3.9 or newer and nothing else. They make
-no network connections and collect no telemetry. MIT licensed.
+it for you, and you can run every step yourself. The scripts need Python 3.9 or newer and nothing else. They
+collect no telemetry and contact no online service: the only network use is ssh to a machine you name, in the
+transporter's ssh-based procedure. MIT licensed.
 
 ## Which tool for which move
 

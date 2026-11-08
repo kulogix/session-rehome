@@ -87,7 +87,8 @@ def desktop_profile(home, name, acct, org):
 root = os.path.realpath(tempfile.mkdtemp(prefix="st-selftest-"))
 try:
     if not os.path.isfile(REHOME):
-        print(f"  FAIL claude-desktop-rehome not found at {REHOME} (clone it next to this skill or set ST_REHOME)")
+        print(f"  FAIL claude-desktop-rehome not found at {REHOME} (install both skills from the "
+              f"claude-session-rehome project, or set ST_REHOME)")
         sys.exit(1)
     # ------------------------------------------------------------------ the ORIGIN machine
     HA = os.path.join(root, "origin-home"); proj = os.path.join(HA, "work", "fib project")

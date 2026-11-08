@@ -12,7 +12,10 @@ credits the reporter unless they prefer otherwise.
 
 ## What the tools touch
 
-The tools run locally, with your own user's rights. They make no network connections and send no telemetry.
+The tools run locally, with your own user's rights, and send no telemetry. They contact no online service. The
+only network use is ssh (and rsync over it) to a machine you name, in the transporter's gated procedure. The
+verifier's load probe starts your own Claude Code with its API address pointed at a closed local port, so no turn
+is spent; any background traffic of Claude Code itself follows your Claude Code settings.
 
 | | `ccd-rehome` | `st-bundle` and the `st-*` scripts |
 |---|---|---|

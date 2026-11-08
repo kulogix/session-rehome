@@ -345,7 +345,10 @@ def main():
         say("dry run: nothing was changed")
     elif ok:
         say("done. Start a NEW Claude Code session (skills are read at startup). Check the tools with:")
-        say(f'  python3 "{os.path.join(target, "claude-desktop-rehome", "scripts", "ccd-rehome")}" doctor')
+        if bindir and ok:
+            say("  ccd-rehome doctor")
+        else:
+            say(f'  python3 "{os.path.join(target, "claude-desktop-rehome", "scripts", "ccd-rehome")}" doctor')
     else:
         say("finished with refusals; see the REFUSED lines above.")
     sys.exit(0 if ok else 1)
