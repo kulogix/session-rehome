@@ -179,6 +179,27 @@
         "quit",
         "round-trip CLI->Desktop->CLI (real turns, CLI 2.1.319)"
       ]
+    },
+    {
+      "tool": "0.9.0",
+      "desktop": "2.31226.1",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "arch": "x86_64",
+      "python": "3.14.6",
+      "date": "2026-11-07",
+      "profiles": 5,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "selftest",
+        "status",
+        "verify"
+      ],
+      "notes": "first release of claude-session-rehome; read-only checks on 5 real profiles (all verify OK)"
     }
   ]
 }
