@@ -3,7 +3,7 @@
 Move a Claude Code session (a terminal session, or a Claude Desktop Code session) to another computer, another
 operating system, or another folder, with its full history, and prove afterwards that nothing was lost or changed.
 
-The tool is `st-bundle`, from the skill claude-session-transporter. It packs one session into a single verified
+The tool is `st-bundle`, from the skill session-transporter. It packs one session into a single verified
 file that you carry over any way you like (scp, a USB stick, a cloud drive). Neither machine needs to reach the
 other.
 
@@ -117,7 +117,7 @@ A good final check: ask the session something only its real history can answer.
 
 - **Pull it over ssh** from a machine this one can reach, with a read-only checkpoint and manifests built on both
   sides, or **restore it from a backup** (a USB disk, an extracted archive): the transporter's gated procedure,
-  [`references/gated-procedure.md`](../skills/claude-session-transporter/references/gated-procedure.md). Your
+  [`references/gated-procedure.md`](../skills/session-transporter/references/gated-procedure.md). Your
   agent knows it; it needs bash and rsync on both sides.
 - **Fork a session** into a new id, keeping the original: `st-bundle import … --new-session-id NEW_UUID`.
 - **A fresh session that knows the context,** without the history: copy the project's memory folder and write a
@@ -129,4 +129,4 @@ On 2026-11-07, a real session (a 0.9 MB conversation, 64 MB of saved tool output
 was exported on Linux x86_64 and imported on macOS 26.6 (Apple Silicon, Python 3.9.6) and on a Raspberry Pi
 (Debian 13, ARM64). Each machine's own Claude Code loaded it, and the original was proven unchanged. Not yet
 tested: a real Windows machine, and moves between different organisations. See
-[`tested.json`](../skills/claude-session-transporter/tested.json).
+[`tested.json`](../skills/session-transporter/tested.json).

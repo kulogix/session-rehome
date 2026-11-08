@@ -1,4 +1,4 @@
-# claude-session-transporter / scripts
+# session-transporter / scripts
 
 Six drivers plus four helpers. They move a Claude Code session — transcript, sidecars,
 memory, task store, project tree — from one host/account to another, and prove afterwards
@@ -24,7 +24,7 @@ checkpoint layout and runs `st-transplant.py`, so the refusals below apply uncha
 - `--no-memory`.
 - `--no-settings`; `--settings-key` now REPLACES the defaults (it used to append to them, so they
   could never be turned off).
-- `--record-file` (a ccd-record/1, adopted through claude-desktop-rehome).
+- `--record-file` (a ccd-record/1, adopted through session-rehome).
 - A Python copy fallback when rsync is absent.
 
 **New in st-checkpoint.sh:** `--no-memory`.

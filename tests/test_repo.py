@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from _common import BUNDLE, REHOME, ROOT, SKILLS, doc_files, read_text, run_tool
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
-SKILL_NAMES = ("claude-desktop-rehome", "claude-session-transporter")
+SKILL_NAMES = ("session-rehome", "session-transporter")
 
 
 def anchors(md):
@@ -66,10 +66,10 @@ class Manifests(unittest.TestCase):
             extra(e)
 
     def test_rehome_tested_json(self):
-        self.check_entries("skills/claude-desktop-rehome/tested.json", ("desktop",), lambda e: None)
+        self.check_entries("skills/session-rehome/tested.json", ("desktop",), lambda e: None)
 
     def test_transporter_tested_json(self):
-        self.check_entries("skills/claude-session-transporter/tested.json", ("role",),
+        self.check_entries("skills/session-transporter/tested.json", ("role",),
                            lambda e: self.assertIn(e["role"], ("export", "import")))
 
     def test_plugin_manifest(self):

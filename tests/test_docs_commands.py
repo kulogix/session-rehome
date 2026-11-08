@@ -13,7 +13,7 @@ import unittest
 
 from _common import BUNDLE, REHOME, ROOT, SKILLS, TRANSPLANT, doc_files, read_text, run_tool
 
-ST_SCRIPTS = os.path.join(SKILLS, "claude-session-transporter", "scripts")
+ST_SCRIPTS = os.path.join(SKILLS, "session-transporter", "scripts")
 SHELL_TOOLS = ("st-preflight.sh", "st-checkpoint.sh", "st-git-rescue.sh", "st-resync.sh", "st-verify.sh")
 SEPARATORS = re.compile(r"\s(?:\||&&|;|\|\||>|2>)\s|`|\)|$")
 

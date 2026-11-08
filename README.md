@@ -1,6 +1,6 @@
-# claude-session-rehome
+# session-rehome
 
-[![CI](https://github.com/kulogix/claude-session-rehome/actions/workflows/ci.yml/badge.svg)](https://github.com/kulogix/claude-session-rehome/actions/workflows/ci.yml)
+[![CI](https://github.com/kulogix/session-rehome/actions/workflows/ci.yml/badge.svg)](https://github.com/kulogix/session-rehome/actions/workflows/ci.yml)
 
 Move your Claude Code and Claude Desktop sessions **without losing anything**:
 - to another **account** ("I signed in to my work account and my sessions are gone");
@@ -25,8 +25,8 @@ transporter's ssh-based procedure. MIT licensed.
 | to another computer or OS | `st-bundle` | `export` there → copy one file → `import` here |
 | from a computer you can ssh to, or from a backup | the transporter's gated procedure | see [other machines](docs/other-machines.md) |
 
-`ccd-rehome` belongs to the skill [claude-desktop-rehome](skills/claude-desktop-rehome/SKILL.md) and works on one
-machine. `st-bundle` belongs to [claude-session-transporter](skills/claude-session-transporter/SKILL.md) and moves
+`ccd-rehome` belongs to the skill [session-rehome](skills/session-rehome/SKILL.md) and works on one
+machine. `st-bundle` belongs to [session-transporter](skills/session-transporter/SKILL.md) and moves
 between machines.
 
 On one machine, every Desktop window and the terminal share the same conversation files (`~/.claude/projects/`).
@@ -40,8 +40,8 @@ move to another machine copies the conversation. Even then it is copied byte for
 | `ccd-rehome` (one machine) | verified: x86_64 and Raspberry Pi | partly verified: self-test and read-only commands on a real Mac | experimental: CI self-test only |
 | `st-bundle` (between machines) | verified: export, and import on a Raspberry Pi | verified: import | untested (pure Python, so expected to work) |
 
-Every combination that passed is recorded in [`skills/claude-desktop-rehome/tested.json`](skills/claude-desktop-rehome/tested.json)
-and [`skills/claude-session-transporter/tested.json`](skills/claude-session-transporter/tested.json). Reports from
+Every combination that passed is recorded in [`skills/session-rehome/tested.json`](skills/session-rehome/tested.json)
+and [`skills/session-transporter/tested.json`](skills/session-transporter/tested.json). Reports from
 macOS and Windows are very welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Install
@@ -52,7 +52,7 @@ Claude Desktop itself is optional: see [docs/get-claude-desktop.md](docs/get-cla
 **For your agent only:** install the plugin. In Claude Code:
 
 ```
-/plugin marketplace add kulogix/claude-session-rehome
+/plugin marketplace add kulogix/session-rehome
 /plugin install session-rehome@kulogix
 ```
 
@@ -61,11 +61,11 @@ skills into `~/.claude/skills` (copies them on Windows) and puts `ccd-rehome`, `
 PATH:
 
 ```bash
-git clone https://github.com/kulogix/claude-session-rehome ~/Projects/claude-session-rehome
+git clone https://github.com/kulogix/session-rehome ~/Projects/session-rehome
 ```
 
 ```bash
-python3 ~/Projects/claude-session-rehome/install.py --bin ~/.local/bin
+python3 ~/Projects/session-rehome/install.py --bin ~/.local/bin
 ```
 
 Then check the machine. `doctor` writes nothing:
@@ -74,8 +74,8 @@ Then check the machine. `doctor` writes nothing:
 ccd-rehome doctor
 ```
 
-Use one install method, not both. Updating, Windows, uninstalling and moving from the older
-`claude-desktop-rehome` and `session-transporter` repositories: [docs/install.md](docs/install.md).
+Use one install method, not both. Updating, Windows, uninstalling, and moving from earlier versions (0.9.x was
+called `claude-session-rehome`): [docs/install.md](docs/install.md).
 
 ## Quick start
 
@@ -173,8 +173,8 @@ What carries over in each direction: [docs/cli-and-desktop.md](docs/cli-and-desk
 | [docs/how-it-works.md](docs/how-it-works.md) | where sessions live, and why they seem to vanish |
 
 **For agents:** each skill's `SKILL.md` is its operating manual
-([claude-desktop-rehome](skills/claude-desktop-rehome/SKILL.md),
-[claude-session-transporter](skills/claude-session-transporter/SKILL.md)). [AGENTS.md](AGENTS.md) covers working on
+([session-rehome](skills/session-rehome/SKILL.md),
+[session-transporter](skills/session-transporter/SKILL.md)). [AGENTS.md](AGENTS.md) covers working on
 this repository.
 
 ## Contributing, security, license

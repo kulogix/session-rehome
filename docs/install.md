@@ -13,22 +13,22 @@ To move a session **between machines**, install on both of them.
 In a Claude Code session:
 
 ```
-/plugin marketplace add kulogix/claude-session-rehome
+/plugin marketplace add kulogix/session-rehome
 /plugin install session-rehome@kulogix
 ```
 
 Or from a shell:
 
 ```bash
-claude plugin marketplace add kulogix/claude-session-rehome
+claude plugin marketplace add kulogix/session-rehome
 ```
 
 ```bash
 claude plugin install session-rehome@kulogix
 ```
 
-The two skills then appear as `session-rehome:claude-desktop-rehome` and
-`session-rehome:claude-session-transporter`, and your agent picks the right one when you describe what you want
+The two skills then appear as `session-rehome:session-rehome` and
+`session-rehome:session-transporter`, and your agent picks the right one when you describe what you want
 ("my Desktop sessions are gone after I switched accounts", "move this session to my laptop").
 
 - **Updating:** third-party marketplaces do not update automatically unless you turn it on (`/plugin`, the
@@ -41,11 +41,11 @@ The plugin keeps its files in Claude Code's plugin cache. To type the commands y
 ## Option 2: a clone and the installer (your agent, and you)
 
 ```bash
-git clone https://github.com/kulogix/claude-session-rehome ~/Projects/claude-session-rehome
+git clone https://github.com/kulogix/session-rehome ~/Projects/session-rehome
 ```
 
 ```bash
-python3 ~/Projects/claude-session-rehome/install.py --bin ~/.local/bin
+python3 ~/Projects/session-rehome/install.py --bin ~/.local/bin
 ```
 
 This links both skills into `~/.claude/skills/` and writes three small launchers into `~/.local/bin`:
@@ -57,7 +57,7 @@ is not). Start a new Claude Code session afterwards: skills are read when a sess
 - **`--copy`** copies instead. Re-run the installer after each `git pull`. A copy you edit is never thrown away:
   the installer moves it to `~/.claude/skill-backups/` before replacing it.
 - **`--dry-run`** shows what it would do. **`--status`** shows what is installed, from where, and which versions.
-- **It never overwrites a folder it did not create.** If `~/.claude/skills/claude-desktop-rehome` already exists
+- **It never overwrites a folder it did not create.** If `~/.claude/skills/session-rehome` already exists
   (for example an older clone), it stops and explains. `--force` moves that folder to `~/.claude/skill-backups/`
   and continues; nothing is deleted.
 
@@ -72,19 +72,19 @@ still matches what the tool expects. It writes nothing. To run every test (synth
 nothing of yours is touched):
 
 ```bash
-python3 ~/Projects/claude-session-rehome/tests/run_all.py
+python3 ~/Projects/session-rehome/tests/run_all.py
 ```
 
 **Updating:**
 
 ```bash
-git -C ~/Projects/claude-session-rehome pull
+git -C ~/Projects/session-rehome pull
 ```
 
 **Removing** (only what the installer installed):
 
 ```bash
-python3 ~/Projects/claude-session-rehome/install.py --uninstall --bin ~/.local/bin
+python3 ~/Projects/session-rehome/install.py --uninstall --bin ~/.local/bin
 ```
 
 ## Windows
@@ -93,8 +93,8 @@ Use `py -3` where these pages say `python3`, and copy mode (symlinks need Develo
 `.cmd` launchers go in any folder on your `PATH`:
 
 ```bat
-git clone https://github.com/kulogix/claude-session-rehome %USERPROFILE%\claude-session-rehome
-py -3 %USERPROFILE%\claude-session-rehome\install.py --copy --bin %USERPROFILE%\bin
+git clone https://github.com/kulogix/session-rehome %USERPROFILE%\session-rehome
+py -3 %USERPROFILE%\session-rehome\install.py --copy --bin %USERPROFILE%\bin
 ```
 
 Add `%USERPROFILE%\bin` to your `PATH` (System Properties, Environment Variables) if it is not there yet.
@@ -107,37 +107,58 @@ them in WSL or Git Bash. Windows support is experimental: please report what wor
 Everything also runs straight from the clone, for example:
 
 ```bash
-python3 ~/Projects/claude-session-rehome/skills/claude-desktop-rehome/scripts/ccd-rehome status
+python3 ~/Projects/session-rehome/skills/session-rehome/scripts/ccd-rehome status
 ```
 
 ```bash
-python3 ~/Projects/claude-session-rehome/skills/claude-session-transporter/scripts/st-bundle.py list
+python3 ~/Projects/session-rehome/skills/session-transporter/scripts/st-bundle.py list
 ```
 
-## Moving from the older repositories
+## Moving from earlier versions
 
-This project replaces `kulogix/claude-desktop-rehome` and the unpublished `session-transporter` skill.
+**From 0.9.x** (the project was called `claude-session-rehome`, its skills `claude-desktop-rehome` and
+`claude-session-transporter`; skill names may not contain the word "claude", so they were renamed in 0.10.0):
 
-1. Clone this project (above).
-2. Run the installer with `--force`. It moves the old `~/.claude/skills/claude-desktop-rehome` and
-   `~/.claude/skills/session-transporter` folders to `~/.claude/skill-backups/` (two copies of a skill must not
-   load at once) and installs the new ones:
+1. Update your clone. GitHub redirects the old address, but point it at the new one:
 
    ```bash
-   python3 ~/Projects/claude-session-rehome/install.py --force --bin ~/.local/bin
+   git -C ~/Projects/claude-session-rehome remote set-url origin https://github.com/kulogix/session-rehome
    ```
 
-3. Nothing else changes. `ccd-rehome` keeps its state and archives in the same folder
-   (`~/.claude-instances/_rehome`), so `rollback` still undoes moves made with the old version. Projects moved with
-   the old transporter keep working: their `CLAUDE.md` note is recognised, and upgraded the next time a session
-   is moved into that project.
+   ```bash
+   git -C ~/Projects/claude-session-rehome pull
+   ```
+
+2. Run the installer again. It removes the old links (and unchanged old copies) itself, installs the skills
+   under their new names, and refreshes the launchers:
+
+   ```bash
+   python3 ~/Projects/claude-session-rehome/install.py --bin ~/.local/bin
+   ```
+
+   A plugin install: `claude plugin uninstall session-rehome@kulogix`, then add the marketplace again from
+   `kulogix/session-rehome` and install.
+
+**From the original `kulogix/claude-desktop-rehome` repository** (before 0.9), or the unpublished
+`session-transporter` skill: clone this project, then run the installer with `--force`. It moves the old
+`~/.claude/skills/claude-desktop-rehome` folder (and any other folder in the way) to `~/.claude/skill-backups/`;
+nothing is deleted.
+
+```bash
+python3 ~/Projects/session-rehome/install.py --force --bin ~/.local/bin
+```
+
+In every case nothing else changes: `ccd-rehome` keeps its state and archives in the same folder
+(`~/.claude-instances/_rehome`), so `rollback` still undoes moves made with an earlier version, and projects
+moved with an earlier transporter keep working (their `CLAUDE.md` note is recognised, and upgraded the next time
+a session is moved into that project).
 
 ## What goes where
 
 | Path | What |
 |---|---|
-| `~/.claude/skills/claude-desktop-rehome/` | the one-machine skill and `ccd-rehome` (a link to the clone, or a copy) |
-| `~/.claude/skills/claude-session-transporter/` | the between-machines skill, `st-bundle.py` and the `st-*` scripts |
+| `~/.claude/skills/session-rehome/` | the one-machine skill and `ccd-rehome` (a link to the clone, or a copy) |
+| `~/.claude/skills/session-transporter/` | the between-machines skill, `st-bundle.py` and the `st-*` scripts |
 | `~/.local/bin/ccd-rehome`, `st-bundle`, `st-verify` | launchers (with `--bin`) |
 | `~/.claude-instances/_rehome/` | `ccd-rehome`'s account registry and the archive behind every change |
 | `~/.local/share/st-bundles/` | unpacked bundles after `st-bundle import --apply` (safe to delete once verified) |

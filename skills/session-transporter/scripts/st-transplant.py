@@ -71,16 +71,16 @@ def mark_begin(sid):
     # keep their path table. A single global marker pair meant the second run's re.sub
     # replaced the first run's block, and the durable half of the relocation message is
     # the only half that survives compaction.
-    return "<!-- BEGIN claude-session-transporter relocation notice: %s -->" % sid
+    return "<!-- BEGIN session-transporter relocation notice: %s -->" % sid
 
 
 def mark_end(sid):
-    return "<!-- END claude-session-transporter relocation notice: %s -->" % sid
+    return "<!-- END session-transporter relocation notice: %s -->" % sid
 
 
-# Blocks written before the skill was renamed (session-transporter -> claude-session-transporter). They are
+# Blocks written before the skill was renamed (session-transporter -> session-transporter). They are
 # recognised and upgraded in place, never duplicated: a project migrated earlier keeps exactly one block.
-LEGACY_NAMES = ("session-transporter",)
+LEGACY_NAMES = ("claude-session-transporter",)   # the 0.9.x skill name; before 0.9 it was the current one
 
 
 def legacy_marks(sid):
@@ -451,7 +451,7 @@ def claude_md_block(sid, moves, origin_desc, dest_desc, ckpt, counts, extra):
     return """%s
 # Relocated workspace — session %s
 
-This tree was migrated by `claude-session-transporter`.
+This tree was migrated by `session-transporter`.
 
   origin   %s
   current  %s
@@ -501,10 +501,13 @@ def dashsafe(argv, opts):
 
 # ------------------------------------------------------------------ main
 def find_rehome():
-    """claude-desktop-rehome's ccd-rehome: $ST_REHOME, a sibling skill, ~/.claude/skills, or PATH."""
+    """session-rehome's ccd-rehome: $ST_REHOME, a sibling skill, ~/.claude/skills, or PATH (the 0.9.x folder name
+    claude-desktop-rehome is still looked for, after the current one)."""
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for c in (os.environ.get("ST_REHOME", ""),
+              os.path.join(os.path.dirname(here), "session-rehome", "scripts", "ccd-rehome"),
               os.path.join(os.path.dirname(here), "claude-desktop-rehome", "scripts", "ccd-rehome"),
+              os.path.expanduser("~/.claude/skills/session-rehome/scripts/ccd-rehome"),
               os.path.expanduser("~/.claude/skills/claude-desktop-rehome/scripts/ccd-rehome"),
               shutil.which("ccd-rehome") or ""):
         if c and os.path.isfile(c):
@@ -734,11 +737,11 @@ def main():
     if a.user_data_dir:
         hits = instance_running(a.user_data_dir)
         rh = find_rehome() if hits is None else None
-        if hits is None and rh:          # no `ps` (Windows): claude-desktop-rehome knows how to tell, on every OS
+        if hits is None and rh:          # no `ps` (Windows): session-rehome knows how to tell, on every OS
             pr = subprocess.run([sys.executable, "-I", rh, "status", a.user_data_dir, "--json", "--dry-run"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
-                hits = ["running (per claude-desktop-rehome)"] if json.loads(pr.stdout)[0]["running"] else []
+                hits = ["running (per session-rehome)"] if json.loads(pr.stdout)[0]["running"] else []
             except (ValueError, KeyError, IndexError):
                 hits = None
         if hits is None:
@@ -1196,7 +1199,7 @@ def main():
     rehome = find_rehome()
     if not a.user_data_dir or (not rehome and not (a.account and a.org)):
         R.info("skipped: " + ("--user-data-dir not given." if not a.user_data_dir else
-                              "without claude-desktop-rehome, --account and --org are both required."))
+                              "without session-rehome, --account and --org are both required."))
         R.info("CLI-direct resume is complete on its own:  cd %s && claude --resume=%s"
                % (dest_root, dest_sid))
     elif desktop_blocked:
@@ -1207,7 +1210,7 @@ def main():
               "--force does not cover this step. Stop the instance and re-run: everything "
               "else is already in place and this script is idempotent.")
     elif rehome:
-        # claude-desktop-rehome owns Desktop-record knowledge: account/org resolution (incl. Desktop's transitional
+        # session-rehome owns Desktop-record knowledge: account/org resolution (incl. Desktop's transitional
         # log lines), validation and drift, archive + rollback, idempotency. One implementation, not two.
         if a.record_file:
             rec_path = a.record_file
@@ -1233,11 +1236,11 @@ def main():
         for line in pr.stdout.decode("utf-8", "replace").splitlines():
             print("         " + line)
         if pr.returncode == 0:
-            R.ok("Desktop record adopted by claude-desktop-rehome (%s)" % rehome)
+            R.ok("Desktop record adopted by session-rehome (%s)" % rehome)
         else:
-            R.bad("claude-desktop-rehome refused to adopt the record (see above); nothing was written there")
+            R.bad("session-rehome refused to adopt the record (see above); nothing was written there")
     else:
-        R.warn_("claude-desktop-rehome not found: writing a MINIMAL Desktop record (settings such as permissions "
+        R.warn_("session-rehome not found: writing a MINIMAL Desktop record (settings such as permissions "
                 "and grants are lost, no archive/undo). Install it next to this skill for full records.")
         sess_dir = os.path.join(a.user_data_dir, "claude-code-sessions", a.account, a.org)
         try:

@@ -10,8 +10,8 @@ Read the skill that fits the request, all of it, and follow it. Each one starts 
 
 | The user wants… | Read |
 |---|---|
-| sessions back after a sign-in change; to move sessions to another account; to move a session to another Desktop window; terminal (CLI) ↔ Desktop | [skills/claude-desktop-rehome/SKILL.md](skills/claude-desktop-rehome/SKILL.md) |
-| to move a session to another computer or operating system; to pull one from a machine reachable over ssh; to restore one from a backup; to fork one | [skills/claude-session-transporter/SKILL.md](skills/claude-session-transporter/SKILL.md) |
+| sessions back after a sign-in change; to move sessions to another account; to move a session to another Desktop window; terminal (CLI) ↔ Desktop | [skills/session-rehome/SKILL.md](skills/session-rehome/SKILL.md) |
+| to move a session to another computer or operating system; to pull one from a machine reachable over ssh; to restore one from a backup; to fork one | [skills/session-transporter/SKILL.md](skills/session-transporter/SKILL.md) |
 
 When you read a SKILL.md as a plain file (not loaded as a skill), `${CLAUDE_SKILL_DIR}` means the folder that
 contains that SKILL.md.
@@ -43,8 +43,8 @@ The rules that matter most (each SKILL.md has the full list and the reasons):
 
 | Path | What it is |
 |---|---|
-| `skills/claude-desktop-rehome/` | skill: `SKILL.md` (agent manual), `scripts/ccd-rehome` (the tool), `scripts/selftest.py`, `references/mechanics.md` (evidence), `tested.json` |
-| `skills/claude-session-transporter/` | skill: `SKILL.md`, `scripts/st-bundle.py` and the `st-*` scripts, `scripts/selftest.py`, `references/` (evidence, formats, the gated procedure), `tested.json` |
+| `skills/session-rehome/` | skill: `SKILL.md` (agent manual), `scripts/ccd-rehome` (the tool), `scripts/selftest.py`, `references/mechanics.md` (evidence), `tested.json` |
+| `skills/session-transporter/` | skill: `SKILL.md`, `scripts/st-bundle.py` and the `st-*` scripts, `scripts/selftest.py`, `references/` (evidence, formats, the gated procedure), `tested.json` |
 | `docs/` | the human guides |
 | `tests/` | repository tests: privacy, skill structure, every documented command against the tools' `--help`, links, manifests, versions, installer. `tests/run_all.py` runs them and both self-tests |
 | `install.py` | installs the skills into `~/.claude/skills` (link or copy) and the command launchers |
@@ -66,7 +66,7 @@ The rules that matter most (each SKILL.md has the full list and the reasons):
 4. **Docs in the same commit as the change:** the SKILL.md (what agents do), `docs/` (what people do),
    `references/` (the evidence), and `CHANGELOG.md` (what changed, what was tested, what was not).
 5. **Versions move in lockstep.** One version for the whole project: `VERSION` in
-   `skills/claude-desktop-rehome/scripts/ccd-rehome` and in `skills/claude-session-transporter/scripts/st-bundle.py`,
+   `skills/session-rehome/scripts/ccd-rehome` and in `skills/session-transporter/scripts/st-bundle.py`,
    `version` in `.claude-plugin/plugin.json`, and the newest `## X.Y.Z` heading in `CHANGELOG.md`.
    `tests/test_repo.py` fails if they disagree. Plugin users only receive an update when the version changes.
 6. **Every documented command must exist.** `tests/test_docs_commands.py` reads every command line in the docs

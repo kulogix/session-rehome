@@ -427,7 +427,7 @@ try:
           "doctor flags a new record field and a new per-account entry as DRIFT, with what to do")
     os.remove(os.path.join(dst, "local_drift1.json")); os.rmdir(os.path.join(dst, "brand-new-store"))
 
-    print("export-record / adopt (the interface claude-session-transporter uses)")
+    print("export-record / adopt (the interface session-transporter uses)")
     src = profile(home, "acct-x1", logs=[init("09:00:00", A, OA)], signed_in=A)
     rx = rec(os.path.join(src, "claude-code-sessions", A, OA), "e1e1e1e1-0000-4000-8000-000000000001", "Café export",
              cwd="/old/host/proj", originCwd="/old/host/proj", gitAnchorsFolderRealpath="/old/host/proj",
@@ -497,14 +497,14 @@ try:
     import importlib.machinery, importlib.util
     spec = importlib.util.spec_from_loader("cr2", importlib.machinery.SourceFileLoader("cr2", TOOL))
     cr2 = importlib.util.module_from_spec(spec); spec.loader.exec_module(cr2)
-    tm = os.path.join(os.path.dirname(os.path.dirname(HERE)), "claude-session-transporter", "scripts", "mangle.py")
+    tm = os.path.join(os.path.dirname(os.path.dirname(HERE)), "session-transporter", "scripts", "mangle.py")
     if os.path.isfile(tm):
         sys.path.insert(0, os.path.dirname(tm)); import mangle as canon
         cases = ["/home/u/Projects/a b", "/a/b.c_d", "/Users/x/Café/漢字", "/p/" + "x" * 230, "C:\\Users\\x\\proj"]
         check(all(cr2.mangle(c) == canon.mangle(c) for c in cases),
-              "rehome's mangle matches claude-session-transporter's canonical mangle.py (incl. >200 chars, non-ASCII)")
+              "rehome's mangle matches session-transporter's canonical mangle.py (incl. >200 chars, non-ASCII)")
     else:
-        print("  (skipped mangle cross-check: claude-session-transporter not installed next to this skill)")
+        print("  (skipped mangle cross-check: session-transporter not installed next to this skill)")
     work = os.path.join(home, "Projects", "cli proj"); os.makedirs(work)
     key = cr2.mangle(os.path.realpath(work))
     pdir = os.path.join(home, ".claude", "projects", key); os.makedirs(pdir, exist_ok=True)

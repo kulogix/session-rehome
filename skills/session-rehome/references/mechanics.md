@@ -140,7 +140,7 @@ script, and `doctor` flags any key outside it.
   `cuSelectedDisplayId`, `cuLastScreenshotDims`, `cuAllowedApps`. They name the origin machine's filesystem,
   displays, apps or browser tabs, so on another host they would point at things that don't exist. They are
   dropped rather than rewritten; Desktop records them afresh as the session is used. Classified from value
-  shapes; adopted records were then loaded by Desktop's CLI on macOS and Linux ARM (claude-session-transporter
+  shapes; adopted records were then loaded by Desktop's CLI on macOS and Linux ARM (session-transporter
   bundle test, 2026-11-07).
 - **Sidebar custom groups** are per identity: `LocalSessions.setCustomGroups: … dropped (identity mismatch)`. They
   are not migrated.

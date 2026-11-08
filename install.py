@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the claude-session-rehome skills for Claude Code (macOS, Linux, Windows; Python 3.9+, stdlib only).
+"""Install the session-rehome skills for Claude Code (macOS, Linux, Windows; Python 3.9+, stdlib only).
 
     python3 install.py                 install both skills into ~/.claude/skills
                                        (linked to this checkout on macOS/Linux, copied on Windows)
@@ -17,7 +17,7 @@ Nothing is ever deleted that this installer did not create unchanged: a copy you
 moved to the backup folder too. Exit status: 0 done, 1 something was refused (the output says what and why).
 
 Alternatively, install as a Claude Code plugin (no checkout needed; do not install both ways):
-    /plugin marketplace add kulogix/claude-session-rehome
+    /plugin marketplace add kulogix/session-rehome
     /plugin install session-rehome@kulogix
 """
 import argparse
@@ -30,15 +30,18 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SKILLS = ("claude-desktop-rehome", "claude-session-transporter")
-MAIN_SCRIPT = {"claude-desktop-rehome": "ccd-rehome", "claude-session-transporter": "st-bundle.py"}
-LEGACY = {"session-transporter": "claude-session-transporter"}     # older folder names: a second copy would load
-MARKER = ".installed-by-claude-session-rehome.json"
+SKILLS = ("session-rehome", "session-transporter")
+MAIN_SCRIPT = {"session-rehome": "ccd-rehome", "session-transporter": "st-bundle.py"}
+# Folder names of earlier releases (0.9.x): a second copy under an old name would load too.
+LEGACY = {"claude-desktop-rehome": "session-rehome", "claude-session-transporter": "session-transporter"}
+MARKER = ".installed-by-session-rehome.json"
+MARKERS = (MARKER, ".installed-by-claude-session-rehome.json")       # read both: 0.9.x copies carry the old one
 # launcher name -> (skill, script, interpreter). st-verify needs bash, so it has no Windows launcher.
-LAUNCHERS = {"ccd-rehome": ("claude-desktop-rehome", "ccd-rehome", "python"),
-             "st-bundle": ("claude-session-transporter", "st-bundle.py", "python"),
-             "st-verify": ("claude-session-transporter", "st-verify.sh", "bash")}
-LAUNCHER_TAG = "installed by claude-session-rehome install.py"
+LAUNCHERS = {"ccd-rehome": ("session-rehome", "ccd-rehome", "python"),
+             "st-bundle": ("session-transporter", "st-bundle.py", "python"),
+             "st-verify": ("session-transporter", "st-verify.sh", "bash")}
+LAUNCHER_TAG = "installed by session-rehome install.py"
+LAUNCHER_TAGS = (LAUNCHER_TAG, "installed by claude-session-rehome install.py")   # 0.9.x launchers are ours too
 WIN = sys.platform.startswith("win")
 DRY = False
 
@@ -78,7 +81,7 @@ def digest(top):
     for d, dirs, files in os.walk(top):
         dirs[:] = sorted(x for x in dirs if x != "__pycache__")
         for f in files:
-            if f == MARKER or f.endswith(".pyc"):
+            if f in MARKERS or f.endswith(".pyc"):
                 continue
             p = os.path.join(d, f)
             with open(p, "rb") as fh:
@@ -89,11 +92,13 @@ def digest(top):
 
 
 def read_marker(dest):
-    try:
-        with open(os.path.join(dest, MARKER), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
+    for name in MARKERS:
+        try:
+            with open(os.path.join(dest, name), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def classify(dest, src):
@@ -183,7 +188,7 @@ def install_one(skill, target, mode, force):
     else:
         say(f"  {skill}: copy {src} -> {dest}")
         if not DRY:
-            shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", MARKER))
+            shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", *MARKERS))
             with open(os.path.join(dest, MARKER), "w", encoding="utf-8") as f:
                 json.dump({"source": ROOT, "commit": commit(), "installed_utc": stamp(), "digest": digest(dest)},
                           f, indent=2)
@@ -191,16 +196,28 @@ def install_one(skill, target, mode, force):
 
 
 def legacy_check(target, force):
+    """An install under an earlier release's folder name would load as a second copy. Our own (a link, or a copy
+    this installer made and nobody edited) is removed, since nothing is lost; anything else needs --force, and is
+    then moved to the backup folder, never deleted."""
     ok = True
     for old, new in LEGACY.items():
         p = os.path.join(target, old)
         if not os.path.lexists(p):
             continue
-        if force:
-            say(f"  {p} is an older install of {new}; moving it aside so only one copy loads")
+        if os.path.islink(p):
+            say(f"  removing {p}, a link from an earlier release (it pointed to {os.readlink(p)}); {new} replaces it")
+            remove(p)
+            continue
+        m = read_marker(p) if os.path.isdir(p) else None
+        if m is not None and m.get("digest") == digest(p):
+            say(f"  removing {p}, an unchanged copy from an earlier release; {new} replaces it")
+            remove(p)
+        elif m is not None or force:
+            say(f"  {p} is an earlier install of {new}{' (edited after installing)' if m else ''}; "
+                f"moving it aside so only one copy loads")
             backup(p, target)
         else:
-            say(f"  REFUSED: {p} is an older install of {new}; both would load.")
+            say(f"  REFUSED: {p} looks like an earlier install of {new}, and both would load.")
             say("  Re-run with --force to move it to ~/.claude/skill-backups/.")
             ok = False
     return ok
@@ -228,7 +245,8 @@ def launcher_body(script, interpreter):
 def ours(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
-            return LAUNCHER_TAG in f.read()
+            text = f.read()
+        return any(tag in text for tag in LAUNCHER_TAGS)
     except OSError:
         return False
 
@@ -348,7 +366,7 @@ def main():
         if bindir and ok:
             say("  ccd-rehome doctor")
         else:
-            say(f'  python3 "{os.path.join(target, "claude-desktop-rehome", "scripts", "ccd-rehome")}" doctor')
+            say(f'  python3 "{os.path.join(target, "session-rehome", "scripts", "ccd-rehome")}" doctor')
     else:
         say("finished with refusals; see the REFUSED lines above.")
     sys.exit(0 if ok else 1)

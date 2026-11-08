@@ -1,5 +1,5 @@
 ---
-name: claude-desktop-rehome
+name: session-rehome
 description: >-
   Moves Claude Desktop Code sessions on THIS machine without losing them: after a sign-in change ("I logged out
   of X and into Y and my sessions are gone", "Desktop doesn't show my old sessions"), between accounts ("move
@@ -8,18 +8,18 @@ description: >-
   Desktop session in the terminal"). Also answers "which window is signed in as whom", "which sessions belong to
   which account", "is this window signed out". Any number of accounts, any --user-data-dir. Dry runs, format
   validation, an archive before every change, exact undo, verification from Desktop's own log. Never signs in or
-  out, never edits a conversation. To move a session to ANOTHER machine or OS, use claude-session-transporter.
+  out, never edits a conversation. To move a session to ANOTHER machine or OS, use session-transporter.
 license: MIT
 compatibility: >-
   Python 3.9+, standard library only. Claude Desktop on Linux (verified), macOS (partly verified), Windows
   (experimental). See tested.json.
 metadata:
-  homepage: https://github.com/kulogix/claude-session-rehome
+  homepage: https://github.com/kulogix/session-rehome
 ---
 
-# claude-desktop-rehome
+# session-rehome
 
-**Which skill?** This one works on **one machine**. The companion skill **claude-session-transporter** moves a
+**Which skill?** This one works on **one machine**. The companion skill **session-transporter** moves a
 session to **another machine or operating system**.
 
 | The user wants to… | Use |
@@ -27,7 +27,7 @@ session to **another machine or operating system**.
 | get sessions back after signing in to a different account, or move them to another account | **this skill** |
 | move a session to another Desktop window (another `--user-data-dir`) on this machine | **this skill** (`move --to-profile`) |
 | show a terminal (CLI) session in Desktop, or continue a Desktop session in the terminal | **this skill** (`register`, `resume-cli`) |
-| move a session to another computer, another OS, or restore it from an archive | **claude-session-transporter** |
+| move a session to another computer, another OS, or restore it from an archive | **session-transporter** |
 
 **How to run the tool.** Every command is
 
@@ -51,7 +51,7 @@ and nothing else.
 | "move this session to my other Desktop window" (another user-data-dir, same machine) | `R move P --only ID --to-profile P2 --dry-run`, then without `--dry-run` (both windows quit) |
 | "show my terminal (CLI) sessions in Desktop" | `R cli-sessions`, then `R register P --cli-session-id ID` (never Desktop's "Recover CLI sessions") |
 | "continue this Desktop session in the terminal" | `R resume-cli P --only ID` (prints the checked command); `R unregister P --only ID` to drop the Desktop record too |
-| put a session record into a profile on ANOTHER machine | use claude-session-transporter's bundle: it runs `R export-record` here and `R adopt` there for you |
+| put a session record into a profile on ANOTHER machine | use session-transporter's bundle: it runs `R export-record` here and `R adopt` there for you |
 | first use on a machine | `R doctor`, then `python3 -I "${CLAUDE_SKILL_DIR}/scripts/selftest.py"` |
 | it worked on a new Desktop version or OS | `R report <what you ran>`, then offer the user to submit it (see "Maintaining this skill") |
 
@@ -166,7 +166,7 @@ converting never edits a transcript:
   record with title and times taken from the transcript, and files it through `adopt` (validated,
   idempotent, archived, undoable). Desktop then lists it; opening it resumes it with Desktop's CLI.
 - **Never use Desktop's own "Recover CLI sessions" import** on a real conversation. It rewrites the
-  transcript in place and strips its thinking content (claude-session-transporter, prohibition 1). `register` is
+  transcript in place and strips its thinking content (session-transporter, prohibition 1). `register` is
   the safe replacement.
 - **Desktop → CLI: `resume-cli`** prints `cd <folder> && claude --resume <id>` after checking the
   conversation is not open in any process (two writers fork the history). The session stays listed in
@@ -197,12 +197,12 @@ converting never edits a transcript:
   Desktop inherits its environment: it was stamped `claude-desktop` and ran as that session's child.
   `resume-cli` warns and prints an `env -i` form. The Desktop-made test transcript was loaded by plain CLIs on
   macOS (2.1.119) and Linux arm64 (2.1.121).
-- **The `mangle()` copy** in the script mirrors claude-session-transporter's canonical `mangle.py`; the self-test
+- **The `mangle()` copy** in the script mirrors session-transporter's canonical `mangle.py`; the self-test
   cross-checks them whenever both are installed.
 
 ## The transplant interface: `export-record` / `adopt`
 
-claude-session-transporter moves *conversations* between machines; this tool owns *Desktop records*. They meet here:
+session-transporter moves *conversations* between machines; this tool owns *Desktop records*. They meet here:
 - **`export-record`** writes one record as `ccd-record/1`: `{format, tool, desktop, exported_utc, record,
   notes}`. Account-bound and transient fields are stripped, and it carries no account or org ids.
 - **`adopt`** files such a record into any profile: by default under the signed-in account, or under `--to`
@@ -269,7 +269,7 @@ first move with `--dry-run`, then `verify`.
 
 ## Maintaining this skill (agents: this is part of the job)
 
-There is **one** copy of this skill: the project at https://github.com/kulogix/claude-session-rehome. A local
+There is **one** copy of this skill: the project at https://github.com/kulogix/session-rehome. A local
 install is normally a link to a clone of it (`install.py`), so the folder you are reading may be inside that clone.
 Desktop, macOS and Windows will change under it. Whoever finds it wrong (usually an agent) fixes it **there**.
 
@@ -306,7 +306,7 @@ A fork fixes one machine once and leaves every other copy broken. A workaround h
    project's `CHANGELOG.md`, with the date and Desktop version.
 7. **Commit** with a message naming the Desktop version and OS. Then **offer** the user to share it upstream as a
    pull request (the project's CONTRIBUTING.md:
-   https://github.com/kulogix/claude-session-rehome/blob/main/CONTRIBUTING.md). Push or open the PR only with their
+   https://github.com/kulogix/session-rehome/blob/main/CONTRIBUTING.md). Push or open the PR only with their
    go-ahead, and never include their emails, ids or paths. Add a `tested.json` entry (`R report …`) once the fix
    has run for real.
 8. **Prefer refusing over guessing.** If the right fix is unclear, make the tool refuse that case with a clear
@@ -322,7 +322,7 @@ A fork fixes one machine once and leaves every other copy broken. A workaround h
 - `tested.json`: the tool, Desktop and OS combinations that passed. `doctor` reads it; `report` makes a new entry.
 - `references/mechanics.md`: storage layout, log lines, and the evidence for every rule.
 - Human guides (installing Desktop, running several windows, switching accounts, moving sessions,
-  troubleshooting): the project's `docs/` folder, https://github.com/kulogix/claude-session-rehome/tree/main/docs.
+  troubleshooting): the project's `docs/` folder, https://github.com/kulogix/session-rehome/tree/main/docs.
 - **Environment:**
   - `CCD_REHOME_PROFILES`: extra profile paths.
   - `CCD_REHOME_DESKTOP`: the app binary for `launch`.

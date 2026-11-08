@@ -1,5 +1,5 @@
 ---
-name: claude-session-transporter
+name: session-transporter
 description: >-
   Moves a Claude Code session to ANOTHER machine or operating system with its full history (transcript, subagent
   and workflow sidecars, memory, tasks, project files, and the Desktop record), verified byte for byte: "continue
@@ -8,28 +8,28 @@ description: >-
   session". Packs one portable, hash-verified file (pure Python, any OS) or takes a read-only checkpoint over ssh,
   then installs it without rewriting history. Also audits what in ~/.claude is safe to copy. Never edits a
   transcript and never uses Desktop's "Recover CLI sessions". For a sign-in change, another Desktop window, or
-  CLI ↔ Desktop on the SAME machine, use claude-desktop-rehome.
+  CLI ↔ Desktop on the SAME machine, use session-rehome.
 license: MIT
 compatibility: >-
   Python 3.9+, standard library only. The bundle path is pure Python (verified on Linux and macOS; Windows
   untested). The ssh checkpoint, verify and write-back drivers also need bash, rsync and ssh. Works best with
-  claude-desktop-rehome installed alongside (it files the Desktop record).
+  session-rehome installed alongside (it files the Desktop record).
 metadata:
-  homepage: https://github.com/kulogix/claude-session-rehome
+  homepage: https://github.com/kulogix/session-rehome
 ---
 
-# claude-session-transporter
+# session-transporter
 
 **Which skill?** This one moves a session **between machines** (or operating systems, or from an archive). The
-companion skill **claude-desktop-rehome** works on **one machine**.
+companion skill **session-rehome** works on **one machine**.
 
 | The user wants to… | Use |
 |---|---|
 | continue a session on another computer or OS; send it to another machine | **this skill**, path 1 (the bundle) |
 | pull a session from a machine this one can ssh to, or restore one from a backup or archive | **this skill**, path 2 (the gated procedure) |
 | fork a session into a new id | **this skill** (`st-transplant.py --new-session-id`, or `st-bundle.py import --new-session-id`) |
-| get sessions back after a sign-in change, or move them to another account, on this machine | **claude-desktop-rehome** |
-| move a session to another Desktop window on this machine, or between the terminal CLI and Desktop | **claude-desktop-rehome** |
+| get sessions back after a sign-in change, or move them to another account, on this machine | **session-rehome** |
+| move a session to another Desktop window on this machine, or between the terminal CLI and Desktop | **session-rehome** |
 
 **How to run the scripts.** They are in `${CLAUDE_SKILL_DIR}/scripts` (if you see that text literally, it means
 the `scripts/` folder next to this SKILL.md):
@@ -101,7 +101,7 @@ Each of these causes loss that no later gate can undo.
    deleted outright, ~6,332 severed `parentUuid` links, walk-back depth collapsed to 1.** It also reads the whole
    file into one JS string (~2 GB peak). There is no undo. Make the session visible by *stopping the target Desktop
    instance, filing the record, starting it* (`references/gated-procedure.md`, G7). To give an existing CLI
-   conversation a Desktop session on the same host, use `ccd-rehome register` (claude-desktop-rehome): it writes
+   conversation a Desktop session on the same host, use `ccd-rehome register` (session-rehome): it writes
    the record and never touches the transcript.
 2. **Never strip, summarize, re-sign or synthesize thinking blocks.** Same damage as above. A fabricated
    `signature` is guaranteed-invalid and makes any API-touching result uninterpretable.
@@ -180,9 +180,9 @@ What it guarantees:
 - **Excludes follow the checkpoint rules:** anchored, justified, and counted.
 - **Filename hazards are scanned at export:** NFC/casefold collisions and names Windows cannot store. Import refuses
   collisions on a case-insensitive destination, and invalid names on Windows.
-- **The Desktop record travels as a `ccd-record/1`** (from claude-desktop-rehome). On import it is **adopted**:
+- **The Desktop record travels as a `ccd-record/1`** (from session-rehome). On import it is **adopted**:
   filed under the signed-in account (or `--to`), with the new cwd, fields bound to the old machine dropped,
-  settings kept, archived, idempotent, undoable. Without claude-desktop-rehome, `st-transplant.py` writes a minimal
+  settings kept, archived, idempotent, undoable. Without session-rehome, `st-transplant.py` writes a minimal
   record and says so.
 - **The receiving CLI version is detected** and stamped into the appended notice.
 
@@ -266,7 +266,7 @@ user-data-dirs give process isolation, not account isolation. Full templates: `r
 **Windows is documented, not verified.** Nothing has run on a real Windows host yet.
 - **The bundle path is pure Python** (`st-bundle.py` → `st-transplant.py`). `st-transplant.py` falls back to a
   Python copy with rsync's exact contract (`ST_NO_RSYNC=1` forces it, and the self-test uses it), reads the tail
-  without `tail`, and asks claude-desktop-rehome whether Desktop is running when `ps` is absent.
+  without `tail`, and asks session-rehome whether Desktop is running when `ps` is absent.
 - **The checkpoint, verify and resync drivers** are POSIX bash + `python3` stdlib, verified on macOS and Linux in
   both roles. The Windows-specific crashes (`os.statvfs`, `os.uname`) are guarded so they degrade rather than
   abort, but how the mangler treats `C:\Users\x` (drive letter and backslashes → dashes) is **untested**. Run the
@@ -312,7 +312,7 @@ Also out of scope:
   transcript and its sidecar dir together; no checkpoint needed;
 - anything asking for the history to be *edited*;
 - a Desktop window that was signed in to a different account and now shows no sessions, a move between Desktop
-  windows, or CLI ↔ Desktop on one machine: use **claude-desktop-rehome**. It moves only the small
+  windows, or CLI ↔ Desktop on one machine: use **session-rehome**. It moves only the small
   `claude-code-sessions/<account>/<org>/` records; transcripts never move.
 
 If a path rewrite is genuinely wanted, the acceptance test is **invertibility**: apply the inverse map and assert
@@ -321,7 +321,7 @@ occurs **zero** times in the input.
 
 ## Maintaining this skill (agents: this is part of the job)
 
-There is **one** copy of this skill: the project at https://github.com/kulogix/claude-session-rehome. A local
+There is **one** copy of this skill: the project at https://github.com/kulogix/session-rehome. A local
 install is normally a link to a clone of it, so the folder you are reading may be inside that clone
 (`git -C "${CLAUDE_SKILL_DIR}" rev-parse --show-toplevel` names it). Fix it **there**: never copy a script
 elsewhere to patch it, never write a variant, never hand-move files around a refusal. If the skill is not inside
@@ -377,7 +377,7 @@ The rules for changing it are the same ones it enforces:
 - `scripts/selftest.py`: a synthetic two-machine test of the bundle path and the transplant / verify options
   (mutation-tested). Run it after any change.
 - `tested.json`: the combinations that passed, per side (export / import).
-- **Companion:** claude-desktop-rehome (`ccd-rehome export-record` / `adopt`) owns Desktop-record knowledge.
+- **Companion:** session-rehome (`ccd-rehome export-record` / `adopt`) owns Desktop-record knowledge.
   Install it next to this skill (or set `ST_REHOME`). Never re-implement record handling here.
 - Human guides (installing on a new machine, moving a session step by step on each OS, troubleshooting): the
-  project's `docs/` folder, https://github.com/kulogix/claude-session-rehome/tree/main/docs.
+  project's `docs/` folder, https://github.com/kulogix/session-rehome/tree/main/docs.

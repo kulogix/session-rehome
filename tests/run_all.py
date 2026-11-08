@@ -15,9 +15,9 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SELFTESTS = [("claude-desktop-rehome", os.path.join(ROOT, "skills", "claude-desktop-rehome", "scripts", "selftest.py")),
-             ("claude-session-transporter",
-              os.path.join(ROOT, "skills", "claude-session-transporter", "scripts", "selftest.py"))]
+SELFTESTS = [("session-rehome", os.path.join(ROOT, "skills", "session-rehome", "scripts", "selftest.py")),
+             ("session-transporter",
+              os.path.join(ROOT, "skills", "session-transporter", "scripts", "selftest.py"))]
 
 
 def main():
@@ -28,7 +28,7 @@ def main():
         for name, path in SELFTESTS:
             t0 = time.time()
             env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
-                       ST_REHOME=os.path.join(ROOT, "skills", "claude-desktop-rehome", "scripts", "ccd-rehome"))
+                       ST_REHOME=os.path.join(ROOT, "skills", "session-rehome", "scripts", "ccd-rehome"))
             p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, encoding="utf-8",
                                errors="replace", env=env)
             out = p.stdout + p.stderr

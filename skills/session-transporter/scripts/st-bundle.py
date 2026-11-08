@@ -16,7 +16,7 @@
 The bundle is a zip (readable by Python's stdlib on every OS) holding exactly what st-checkpoint.sh would take:
 the transcript (a byte-exact prefix snapshot), its sidecar dir, tasks/<SID>, the project memory (unless
 --no-memory), sibling keys' sidecars, the project tree (minus excludes and secret-looking files), and optionally
-the Desktop record as a ccd-record/1 (from claude-desktop-rehome). manifest.json lists every member with its
+the Desktop record as a ccd-record/1 (from session-rehome). manifest.json lists every member with its
 sha256. `import` verifies all of it, unpacks into the checkpoint layout, and hands over to st-transplant.py,
 which does the careful part (mangled key, append-only relocation notice, CLAUDE.md, receipts, record adoption).
 
@@ -25,7 +25,7 @@ Never edits a transcript. Never reads or packs credentials, ~/.claude.json, hist
 import argparse, datetime, glob, hashlib, io, json, os, platform, re, shutil, subprocess, sys, tempfile, unicodedata
 import zipfile
 
-VERSION = "0.9.3"
+VERSION = "0.10.0"
 FORMAT = "claude-session-bundle/1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -124,8 +124,8 @@ def profile_path(spec):
 
 def find_rehome():
     for c in (os.environ.get("ST_REHOME", ""),
-              os.path.join(os.path.dirname(os.path.dirname(HERE)), "claude-desktop-rehome", "scripts", "ccd-rehome"),
-              os.path.expanduser("~/.claude/skills/claude-desktop-rehome/scripts/ccd-rehome"),
+              os.path.join(os.path.dirname(os.path.dirname(HERE)), "session-rehome", "scripts", "ccd-rehome"),
+              os.path.expanduser("~/.claude/skills/session-rehome/scripts/ccd-rehome"),
               shutil.which("ccd-rehome") or ""):
         if c and os.path.isfile(c):
             return c
@@ -310,7 +310,7 @@ def export(a):
     if a.desktop_profile and not a.no_record:
         rh = find_rehome()                 # read-only calls: always --dry-run, so rehome writes no state either
         if not rh:
-            die("--desktop-profile needs claude-desktop-rehome (ccd-rehome): install it next to this skill, or pass "
+            die("--desktop-profile needs session-rehome (ccd-rehome): install it next to this skill, or pass "
                 "--no-record")
         rid = a.record_id
         if not rid:

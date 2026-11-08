@@ -10,7 +10,7 @@ payload/claude/projects/<KEY>/memory/...        project memory (absent when no_m
 payload/claude/projects/<SIBLING>/<SID>/...     sibling project keys' data for this session (worktrees)
 payload/claude/tasks/<SID>/...                  the session's task store
 payload/project/...                             project tree minus excludes and secret-looking files
-record/record.json                              optional: the Desktop record as ccd-record/1 (claude-desktop-rehome)
+record/record.json                              optional: the Desktop record as ccd-record/1 (session-rehome)
 ```
 
 `payload/` is exactly a st-checkpoint.sh generation's `claude/` + `project/`. `import` extracts it, adds

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Self-test for claude-session-transporter's bundle path and the st-transplant.py / st-verify.sh fixes.
+"""Self-test for session-transporter's bundle path and the st-transplant.py / st-verify.sh fixes.
 
 Builds two synthetic machines in a temp dir (an ORIGIN home with a session, sidecars, memory, tasks, a sibling
 key, decoy credentials and secret-looking project files; a DESTINATION home with a Desktop profile) and checks
-every promise. Touches nothing outside the temp dir. Needs claude-desktop-rehome next to this skill (or
+every promise. Touches nothing outside the temp dir. Needs session-rehome next to this skill (or
 $ST_REHOME) for the Desktop-record checks.      python3 -I selftest.py      exit 0 = all pass
 """
 import datetime, glob, hashlib, json, os, shutil, sqlite3, subprocess, sys, tempfile, zipfile
@@ -22,7 +22,7 @@ BUNDLE = os.path.join(HERE, "st-bundle.py")
 TRANSPLANT = os.path.join(HERE, "st-transplant.py")
 VERIFY = os.path.join(HERE, "st-verify.sh")
 REHOME = os.environ.get("ST_REHOME") or os.path.join(os.path.dirname(os.path.dirname(HERE)),
-                                                     "claude-desktop-rehome", "scripts", "ccd-rehome")
+                                                     "session-rehome", "scripts", "ccd-rehome")
 SID = "11111111-2222-4333-8444-555555555555"
 A, OA = "aaaaaaaa-1111-4111-8111-111111111111", "0a0a0a0a-1111-4111-8111-111111111111"
 B, OB = "bbbbbbbb-2222-4222-8222-222222222222", "0b0b0b0b-2222-4222-8222-222222222222"
@@ -117,8 +117,8 @@ def desktop_profile(home, name, acct, org):
 root = os.path.realpath(tempfile.mkdtemp(prefix="st-selftest-"))
 try:
     if not os.path.isfile(REHOME):
-        print(f"  FAIL claude-desktop-rehome not found at {REHOME} (install both skills from the "
-              f"claude-session-rehome project, or set ST_REHOME)")
+        print(f"  FAIL session-rehome not found at {REHOME} (install both skills from the "
+              f"session-rehome project, or set ST_REHOME)")
         sys.exit(1)
     # ------------------------------------------------------------------ the ORIGIN machine
     HA = os.path.join(root, "origin-home"); proj = os.path.join(HA, "work", "fib project")
@@ -265,7 +265,7 @@ try:
     pr = json.load(open(placed[0], encoding="utf-8")) if placed else {}
     check(len(placed) == 1 and pr.get("cliSessionId") == SID and pr.get("cwd") == dest and pr.get("effort") == "max"
           and pr.get("sessionSettings") == {"ultracode": True} and "planPath" not in pr,
-          "Desktop record adopted via claude-desktop-rehome: signed-in account, new cwd, settings kept, host fields dropped")
+          "Desktop record adopted via session-rehome: signed-in account, new cwd, settings kept, host fields dropped")
     rc, o = py(BUNDLE, "import", out, "--dest-root", dest, "--claude-home", chb, "--desktop-profile", pb,
                "--staging", os.path.join(HB, "staging"), "--apply", home=HB)
     check(rc == 0 and len(glob.glob(os.path.join(pb, "claude-code-sessions", B, OB, "local_*.json"))) == 1,
@@ -285,23 +285,24 @@ try:
     HL = os.path.join(root, "dest-legacy"); chl = os.path.join(HL, ".claude"); os.makedirs(chl)
     destl = os.path.join(HL, "fib"); os.makedirs(destl)
     open(os.path.join(destl, "CLAUDE.md"), "w", encoding="utf-8").write(
-        f"<!-- BEGIN session-transporter relocation notice: {SID} -->\nold table\n"
-        f"<!-- END session-transporter relocation notice: {SID} -->\n\n# user notes\nkeep me\n")
+        f"<!-- BEGIN claude-session-transporter relocation notice: {SID} -->\nold table\n"
+        f"<!-- END claude-session-transporter relocation notice: {SID} -->\n\n# user notes\nkeep me\n")
     rc, o = py(BUNDLE, "import", out, "--dest-root", destl, "--claude-home", chl, "--staging",
                os.path.join(HL, "staging"), "--apply", home=HL)
     cm = open(os.path.join(destl, "CLAUDE.md"), encoding="utf-8").read()
-    check(rc == 0 and cm.count("relocation notice: " + SID) == 2 and "BEGIN claude-session-transporter" in cm
-          and "BEGIN session-transporter" not in cm and "old table" not in cm and "keep me" in cm,
-          "a block written under the old skill name is REPLACED (upgraded), not duplicated; user text kept")
+    check(rc == 0 and cm.count("relocation notice: " + SID) == 2 and "<!-- BEGIN session-transporter" in cm
+          and "claude-session-transporter" not in cm and "old table" not in cm and "keep me" in cm,
+          "a block written under the 0.9.x skill name is REPLACED (upgraded), not duplicated; user text kept")
     if not BASH_OK:
         no_bash("the st-verify.sh legacy-marker check")
     else:
         open(os.path.join(destl, "CLAUDE.md"), "w", encoding="utf-8").write(
-            f"<!-- BEGIN session-transporter relocation notice: {SID} -->\nold\n<!-- END session-transporter relocation notice: {SID} -->\n")
+            f"<!-- BEGIN claude-session-transporter relocation notice: {SID} -->\nold\n"
+            f"<!-- END claude-session-transporter relocation notice: {SID} -->\n")
         stl = os.path.join(HL, "staging"); stl = os.path.join(stl, os.listdir(stl)[0])
         rc, o = run(["bash", VERIFY, "--checkpoint", stl, "--dest-root", destl, "--session-id", SID, "--claude-home", chl,
                      "--no-probe", "--no-tree-check"], HL)
-        check("CLAUDE.md carries this session's" in o, "st-verify.sh recognises a block written under the old skill name")
+        check("CLAUDE.md carries this session's" in o, "st-verify.sh recognises a block written under the 0.9.x skill name")
 
     print("st-transplant.py settings fix")
     stg = os.path.join(HB, "staging"); stg = os.path.join(stg, os.listdir(stg)[0])

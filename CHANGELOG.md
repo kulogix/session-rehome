@@ -4,6 +4,26 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.10.0 — 2026-11-08
+
+**Renamed: the project is now `session-rehome`** (https://github.com/kulogix/session-rehome; GitHub redirects the
+old address), and its skills are **`session-rehome`** (one machine) and **`session-transporter`** (between
+machines). The Agent Skills rules say a skill's name "cannot contain reserved words: `anthropic`, `claude`", so
+`claude-desktop-rehome` and `claude-session-transporter` could never have been uploaded to claude.ai or the Skills
+API (Claude Code itself accepted them). The plugin keeps its name, `session-rehome@kulogix`; the commands keep
+theirs (`ccd-rehome`, `st-bundle`, `st-verify`).
+
+- **Upgrading needs no clean-up by hand:** `install.py` removes its own 0.9.x links and unchanged copies, refuses a
+  folder under an old name that it did not make (moves it aside with `--force`), and recognises its 0.9.x
+  launchers. See docs/install.md, "Moving from earlier versions".
+- **Projects moved with 0.9.x keep working:** their `CLAUDE.md` block (marker `claude-session-transporter`) is
+  recognised by `st-verify.sh` and upgraded in place by the next transplant, never duplicated. `st-transplant.py`
+  also finds the rehome tool under its 0.9.x folder name.
+- **A test enforces the naming rule:** no skill name may contain `claude` or `anthropic`, or exceed 64 characters.
+
+**Tested:** `python3 tests/run_all.py` (both self-tests and the repository tests), including the installer's
+upgrade paths (an old link, an old launcher, a foreign folder under an old name).
+
 ## 0.9.3 — 2026-11-08
 
 - **Every text file is read and written as UTF-8, on every OS.** 36 text-mode `open()` calls named no encoding, so

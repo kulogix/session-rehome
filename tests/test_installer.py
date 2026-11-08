@@ -30,10 +30,10 @@ class Installer(unittest.TestCase):
     def test_copy_install_is_complete_and_marked(self):
         rc, out = run("--copy", "--target", self.target)
         self.assertEqual(rc, 0, out)
-        for s in ("claude-desktop-rehome", "claude-session-transporter"):
+        for s in ("session-rehome", "session-transporter"):
             d = os.path.join(self.target, s)
             self.assertTrue(os.path.isfile(os.path.join(d, "SKILL.md")))
-            self.assertTrue(os.path.isfile(os.path.join(d, ".installed-by-claude-session-rehome.json")))
+            self.assertTrue(os.path.isfile(os.path.join(d, ".installed-by-session-rehome.json")))
             self.assertFalse(os.path.islink(d))
         rc, out = run("--copy", "--target", self.target)
         self.assertEqual(rc, 0, "re-running is safe (refresh of our own copy)\n" + out)
@@ -42,14 +42,14 @@ class Installer(unittest.TestCase):
     def test_link_install_points_at_the_checkout(self):
         rc, out = run("--link", "--target", self.target)
         self.assertEqual(rc, 0, out)
-        d = os.path.join(self.target, "claude-desktop-rehome")
+        d = os.path.join(self.target, "session-rehome")
         self.assertTrue(os.path.islink(d))
-        self.assertEqual(os.path.realpath(d), os.path.realpath(os.path.join(ROOT, "skills", "claude-desktop-rehome")))
+        self.assertEqual(os.path.realpath(d), os.path.realpath(os.path.join(ROOT, "skills", "session-rehome")))
         rc, out = run("--link", "--target", self.target)
         self.assertIn("already linked", out)
 
     def test_foreign_folder_is_refused_then_backed_up_never_deleted(self):
-        foreign = os.path.join(self.target, "claude-desktop-rehome")
+        foreign = os.path.join(self.target, "session-rehome")
         os.makedirs(foreign)
         with open(os.path.join(foreign, "my-notes.txt"), "w") as f:
             f.write("precious")
@@ -61,19 +61,47 @@ class Installer(unittest.TestCase):
         rc, out = run("--copy", "--force", "--target", self.target)
         self.assertEqual(rc, 0, out)
         backups = os.listdir(os.path.join(self.tmp, ".claude", "skill-backups"))
-        kept = [b for b in backups if b.startswith("claude-desktop-rehome-")]
+        kept = [b for b in backups if b.startswith("session-rehome-")]
         self.assertEqual(len(kept), 1)
         with open(os.path.join(self.tmp, ".claude", "skill-backups", kept[0], "my-notes.txt")) as f:
             self.assertEqual(f.read(), "precious")
 
-    def test_legacy_install_is_flagged(self):
-        os.makedirs(os.path.join(self.target, "session-transporter"))
+    def test_foreign_legacy_folder_is_refused_then_backed_up(self):
+        """A folder under a 0.9.x skill name that this installer did not make: refused, then moved, never deleted."""
+        old = os.path.join(self.target, "claude-session-transporter")
+        os.makedirs(old)
+        with open(os.path.join(old, "notes.txt"), "w") as f:
+            f.write("mine")
         rc, out = run("--copy", "--target", self.target)
         self.assertNotEqual(rc, 0)
-        self.assertIn("older install", out)
+        self.assertIn("earlier install", out)
         rc, out = run("--copy", "--force", "--target", self.target)
         self.assertEqual(rc, 0, out)
-        self.assertFalse(os.path.exists(os.path.join(self.target, "session-transporter")))
+        self.assertFalse(os.path.exists(old))
+        kept = [b for b in os.listdir(os.path.join(self.tmp, ".claude", "skill-backups"))
+                if b.startswith("claude-session-transporter-")]
+        self.assertEqual(len(kept), 1)
+
+    @unittest.skipIf(sys.platform.startswith("win"), "symlinks need special rights on Windows")
+    def test_our_legacy_link_is_replaced_without_force(self):
+        """A 0.9.x link install (now dangling, the checkout moved) is ours: replaced, no --force needed."""
+        os.makedirs(self.target)
+        os.symlink(os.path.join(self.tmp, "old-checkout", "skills", "claude-desktop-rehome"),
+                   os.path.join(self.target, "claude-desktop-rehome"))
+        rc, out = run("--link", "--target", self.target)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.lexists(os.path.join(self.target, "claude-desktop-rehome")))
+        self.assertTrue(os.path.isfile(os.path.join(self.target, "session-rehome", "SKILL.md")))
+
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX launcher check")
+    def test_launchers_from_an_earlier_release_are_ours(self):
+        os.makedirs(self.bin)
+        with open(os.path.join(self.bin, "ccd-rehome"), "w") as f:
+            f.write("#!/bin/sh\n# installed by claude-session-rehome install.py\nexec python3 /old/path \"$@\"\n")
+        rc, out = run("--copy", "--target", self.target, "--bin", self.bin)
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(self.bin, "ccd-rehome")) as f:
+            self.assertIn("installed by session-rehome install.py", f.read())
 
     def test_dry_run_changes_nothing(self):
         rc, out = run("--copy", "--target", self.target, "--bin", self.bin, "--dry-run")
@@ -106,28 +134,28 @@ class Installer(unittest.TestCase):
     def test_edited_copy_is_backed_up_not_deleted(self):
         rc, out = run("--copy", "--target", self.target)
         self.assertEqual(rc, 0, out)
-        note = os.path.join(self.target, "claude-desktop-rehome", "my-fix.txt")
+        note = os.path.join(self.target, "session-rehome", "my-fix.txt")
         with open(note, "w") as f:
             f.write("an edit made after installing")
         rc, out = run("--status", "--target", self.target)
         self.assertIn("ours-copy-edited", out)
         rc, out = run("--uninstall", "--target", self.target)
         self.assertEqual(rc, 0, out)
-        self.assertFalse(os.path.exists(os.path.join(self.target, "claude-desktop-rehome")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "session-rehome")))
         kept = [b for b in os.listdir(os.path.join(self.tmp, ".claude", "skill-backups"))
-                if b.startswith("claude-desktop-rehome-")]
+                if b.startswith("session-rehome-")]
         self.assertEqual(len(kept), 1, "the edited copy must survive in skill-backups")
         self.assertTrue(os.path.isfile(os.path.join(self.tmp, ".claude", "skill-backups", kept[0], "my-fix.txt")))
 
     @unittest.skipIf(sys.platform.startswith("win"), "symlinks need special rights on Windows")
     def test_broken_link_is_replaced(self):
         os.makedirs(self.target)
-        os.symlink(os.path.join(self.tmp, "gone", "claude-desktop-rehome"),
-                   os.path.join(self.target, "claude-desktop-rehome"))
+        os.symlink(os.path.join(self.tmp, "gone", "session-rehome"),
+                   os.path.join(self.target, "session-rehome"))
         rc, out = run("--link", "--target", self.target)
         self.assertEqual(rc, 0, out)
         self.assertIn("broken link", out)
-        self.assertTrue(os.path.isfile(os.path.join(self.target, "claude-desktop-rehome", "SKILL.md")))
+        self.assertTrue(os.path.isfile(os.path.join(self.target, "session-rehome", "SKILL.md")))
 
     def test_uninstall_removes_only_ours(self):
         rc, out = run("--copy", "--target", self.target, "--bin", self.bin)
@@ -135,7 +163,7 @@ class Installer(unittest.TestCase):
         os.makedirs(other)
         rc, out = run("--uninstall", "--target", self.target, "--bin", self.bin)
         self.assertEqual(rc, 0, out)
-        self.assertFalse(os.path.exists(os.path.join(self.target, "claude-desktop-rehome")))
+        self.assertFalse(os.path.exists(os.path.join(self.target, "session-rehome")))
         self.assertTrue(os.path.isdir(other))
         self.assertEqual([f for f in os.listdir(self.bin)], [])
 

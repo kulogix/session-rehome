@@ -13,11 +13,11 @@ ccd-rehome report doctor selftest dry-run rehome verify
 ```
 
 List only what you actually ran. Paste the JSON into a **"Works on my setup"** issue, or add it to the `tested`
-list in [`skills/claude-desktop-rehome/tested.json`](skills/claude-desktop-rehome/tested.json) in a pull request.
+list in [`skills/session-rehome/tested.json`](skills/session-rehome/tested.json) in a pull request.
 The report contains versions only: no e-mail addresses, ids, paths or host names.
 
 **For the transporter** (between machines): add one entry per side to
-[`skills/claude-session-transporter/tested.json`](skills/claude-session-transporter/tested.json), in the format of
+[`skills/session-transporter/tested.json`](skills/session-transporter/tested.json), in the format of
 the entries already there: `tool` (the `st-bundle --version` number), `role` (`export` or `import`), `os_family`,
 `os`, `arch`, `python`, `date`, and `verified` (what ran: `list`, `export`, `inspect`, `import`, `verify`,
 `origin-proof`, `desktop-load`). Never include paths, host names or session ids.
@@ -57,11 +57,11 @@ python3 tests/run_all.py
 ## How to open a pull request
 
 ```bash
-gh repo fork kulogix/claude-session-rehome --clone
+gh repo fork kulogix/session-rehome --clone
 ```
 
 ```bash
-cd claude-session-rehome && git checkout -b handle-desktop-4-30-new-field
+cd session-rehome && git checkout -b handle-desktop-4-30-new-field
 ```
 
 Make the change, run the tests, then:

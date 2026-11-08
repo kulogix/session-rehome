@@ -58,12 +58,12 @@ from the original machine shows that the original conversation still has exactly
 
 ## Further reading
 
-- [`skills/claude-desktop-rehome/references/mechanics.md`](../skills/claude-desktop-rehome/references/mechanics.md):
+- [`skills/session-rehome/references/mechanics.md`](../skills/session-rehome/references/mechanics.md):
   the Desktop storage layout, the log lines the tool reads, and the evidence for every rule.
-- [`skills/claude-session-transporter/references/mechanics.md`](../skills/claude-session-transporter/references/mechanics.md):
+- [`skills/session-transporter/references/mechanics.md`](../skills/session-transporter/references/mechanics.md):
   the conversation format, the folder key, resuming, and what is safe to change.
-- [`skills/claude-session-transporter/references/bundle-format.md`](../skills/claude-session-transporter/references/bundle-format.md):
+- [`skills/session-transporter/references/bundle-format.md`](../skills/session-transporter/references/bundle-format.md):
   the bundle and proof formats.
-- [`skills/claude-session-transporter/references/integrity.md`](../skills/claude-session-transporter/references/integrity.md)
-  and [`secrets.md`](../skills/claude-session-transporter/references/secrets.md): verification, and what must
+- [`skills/session-transporter/references/integrity.md`](../skills/session-transporter/references/integrity.md)
+  and [`secrets.md`](../skills/session-transporter/references/secrets.md): verification, and what must
   never be copied.

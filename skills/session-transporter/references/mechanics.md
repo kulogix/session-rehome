@@ -1,7 +1,7 @@
 # mechanics.md — how Claude Code session storage actually works
 
 **Purpose.** This is the measured, citable mechanics of Claude Code session storage. It exists so a
-future run of `claude-session-transporter` does **not** re-derive any of it. Every non-obvious claim below
+future run of `session-transporter` does **not** re-derive any of it. Every non-obvious claim below
 was established empirically in the migration of session
 `5e55105e-0000-4000-8000-000000000001` (mac1/macOS/arm64 → Linux/x86_64, cross-account **and**
 cross-org), or lifted from the CLI ELF / Desktop `app.asar`. Where a claim is inferred, it says so.

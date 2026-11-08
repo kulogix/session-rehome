@@ -6,9 +6,9 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILLS = os.path.join(ROOT, "skills")
-REHOME = os.path.join(SKILLS, "claude-desktop-rehome", "scripts", "ccd-rehome")
-BUNDLE = os.path.join(SKILLS, "claude-session-transporter", "scripts", "st-bundle.py")
-TRANSPLANT = os.path.join(SKILLS, "claude-session-transporter", "scripts", "st-transplant.py")
+REHOME = os.path.join(SKILLS, "session-rehome", "scripts", "ccd-rehome")
+BUNDLE = os.path.join(SKILLS, "session-transporter", "scripts", "st-bundle.py")
+TRANSPLANT = os.path.join(SKILLS, "session-transporter", "scripts", "st-transplant.py")
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", "build", "dist"}
 # Records of past runs: their commands are quoted as executed then, not instructions for today's tools.
 HISTORICAL = {"evidence-base.md", "lessons.md"}

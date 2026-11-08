@@ -1,5 +1,5 @@
 {
-  "about": "Combinations of the transporter (st-bundle and the st-* scripts) x OS that passed. One entry per run and per side: role `export` ran on the origin machine, role `import` on the destination. `verified` lists what actually ran: selftest = the synthetic suite; export / import / inspect = st-bundle.py subcommands; verify = st-verify.sh (prefix hash, sidecars, and a load of the transcript by the real CLI against a local mock API, so no turn is spent); origin-proof = the destination checked the origin's hash. Add yours with a pull request (https://github.com/kulogix/claude-session-rehome/blob/main/CONTRIBUTING.md).",
+  "about": "Combinations of the transporter (st-bundle and the st-* scripts) x OS that passed. One entry per run and per side: role `export` ran on the origin machine, role `import` on the destination. `verified` lists what actually ran: selftest = the synthetic suite; export / import / inspect = st-bundle.py subcommands; verify = st-verify.sh (prefix hash, sidecars, and a load of the transcript by the real CLI against a local mock API, so no turn is spent); origin-proof = the destination checked the origin's hash. Add yours with a pull request (https://github.com/kulogix/session-rehome/blob/main/CONTRIBUTING.md).",
   "tested": [
     {
       "tool": "0.1.0",

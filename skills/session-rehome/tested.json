@@ -1,5 +1,5 @@
 {
-  "about": "Combinations of ccd-rehome x Claude Desktop x OS that passed. One entry per run. `verified` lists what actually ran: selftest = the synthetic suite; doctor/status/dry-run = read-only on real profiles; move/rehome/rollback/register/adopt/verify/quit/launch = live operations on real profiles. `desktop` is the version that last ran the profile (from its log). `doctor` reads this file to say how far your OS is verified. Add yours: run `ccd-rehome report <what you ran>` and open a pull request (https://github.com/kulogix/claude-session-rehome/blob/main/CONTRIBUTING.md).",
+  "about": "Combinations of ccd-rehome x Claude Desktop x OS that passed. One entry per run. `verified` lists what actually ran: selftest = the synthetic suite; doctor/status/dry-run = read-only on real profiles; move/rehome/rollback/register/adopt/verify/quit/launch = live operations on real profiles. `desktop` is the version that last ran the profile (from its log). `doctor` reads this file to say how far your OS is verified. Add yours: run `ccd-rehome report <what you ran>` and open a pull request (https://github.com/kulogix/session-rehome/blob/main/CONTRIBUTING.md).",
   "tested": [
     {
       "tool": "0.4.0",
@@ -199,7 +199,7 @@
         "status",
         "verify"
       ],
-      "notes": "first release of claude-session-rehome; read-only checks on 5 real profiles (all verify OK)"
+      "notes": "first release of session-rehome; read-only checks on 5 real profiles (all verify OK)"
     }
   ]
 }

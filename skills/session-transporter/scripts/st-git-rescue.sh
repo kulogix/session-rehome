@@ -48,7 +48,7 @@ st-git-rescue.sh — rescue a repo whose only filename mapping is .git/index.
                      NOT be committed. Any of them still untracked-and-unignored refuses
                      the drift commit. Strongly recommended: `git add -A` commits keys.
   --author "N <e>"   identity for the rescue commits
-                     (default: "claude-session-transporter <claude-session-transporter@localhost>")
+                     (default: "session-transporter <session-transporter@localhost>")
   --message MSG      subject of the index commit (default: "rescue: staged index snapshot")
   -h | --help
 
@@ -63,7 +63,7 @@ EOF
 }
 
 REPO=""; WORK=""; OUT=""; APPLY=0; SCAN=""; INPLACE=0; SENSLIST=""
-AUTHOR="claude-session-transporter <claude-session-transporter@localhost>"
+AUTHOR="session-transporter <session-transporter@localhost>"
 MSG="rescue: staged index snapshot"
 
 while [ $# -gt 0 ]; do

@@ -21,7 +21,7 @@ Six commands. Everything else in this file explains why each one refuses what it
 values so you type them once; **command-line flags always override the profile**.
 
 ```bash
-S=/path/to/claude-session-transporter/scripts
+S=/path/to/session-transporter/scripts
 
 # 0. DISCOVERY — you do not know the session id. Nobody does; it is a uuid inside a
 #    directory whose name the mangler makes unguessable.
@@ -240,11 +240,11 @@ Origin `settings.json` keys that are *not* merged are listed as a warning: if th
    `ps -eo pid,comm,args | awk '$2 ~ /claude|electron/ && index($0, "<dir>")'`. **Never `pgrep -af '<pattern>'`**:
    it self-matches the checking shell (2 false positives measured). **Never `pkill -f`**: it self-matched and
    killed a run mid-experiment. `--force` lets steps 1–6 proceed; it never permits the session mint.
-   `ccd-rehome status P` (claude-desktop-rehome) answers the same question on every OS.
+   `ccd-rehome status P` (session-rehome) answers the same question on every OS.
 2. Workspace trust: the app shows its dialog once and accepting it there is the safe path. `--trust` writes
    `projects["<dest root>"].hasTrustDialogAccepted = true` into the CLI's host-wide config. It is **off by
    default** and refuses while any claude process runs.
-3. The Desktop session record. With claude-desktop-rehome installed (the normal case), `st-transplant.py` hands
+3. The Desktop session record. With session-rehome installed (the normal case), `st-transplant.py` hands
    the record to `ccd-rehome adopt`: validated, filed under the signed-in account (or `--account`), archived,
    undoable. Without it, a minimal record is minted at
    `<user-data-dir>/claude-code-sessions/<accountUuid>/<orgUuid>/local_<uuid4>.json`, with these rules:

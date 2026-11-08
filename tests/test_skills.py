@@ -11,7 +11,7 @@ NAMES = sorted(d for d in os.listdir(SKILLS) if os.path.isfile(os.path.join(SKIL
 
 class Skills(unittest.TestCase):
     def test_both_skills_present(self):
-        self.assertEqual(NAMES, ["claude-desktop-rehome", "claude-session-transporter"])
+        self.assertEqual(NAMES, ["session-rehome", "session-transporter"])
 
     def test_frontmatter(self):
         for n in NAMES:
@@ -19,6 +19,9 @@ class Skills(unittest.TestCase):
             self.assertIsNotNone(fm, f"{n}: SKILL.md must start with --- frontmatter ---")
             self.assertEqual(fm.get("name"), n, f"{n}: frontmatter name must equal the directory name")
             self.assertRegex(n, r"^[a-z0-9]+(-[a-z0-9]+)*$")
+            self.assertLessEqual(len(n), 64)
+            for word in ("claude", "anthropic"):    # the Agent Skills rule: claude.ai and the Skills API reject them
+                self.assertNotIn(word, n, f"{n}: a skill name cannot contain the reserved word {word!r}")
             d = fm.get("description", "")
             self.assertTrue(d, f"{n}: description missing")
             self.assertLessEqual(len(d), 1024, f"{n}: description is {len(d)} chars (limit 1024)")

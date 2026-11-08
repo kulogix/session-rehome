@@ -7,7 +7,7 @@ Every refusal says why, and nothing was changed when a command refuses. Find the
 | You see | Do |
 |---|---|
 | `REFUSED: … exists and was not installed by this installer` | an older copy is in the way. `install.py --force` moves it to `~/.claude/skill-backups/` (nothing is deleted) |
-| `an older install of claude-session-transporter` | the old `session-transporter` folder is present; both would load. `install.py --force` moves it aside |
+| `an older install of session-transporter` | the old `session-transporter` folder is present; both would load. `install.py --force` moves it aside |
 | `ccd-rehome: command not found` | the launcher folder is not on your `PATH`, or you installed without `--bin`. Re-run `install.py --bin ~/.local/bin` and add that folder to `PATH` |
 | `could not create a symlink` (Windows) | use `install.py --copy` |
 | the agent does not find the skills | start a new Claude Code session: skills are read when a session starts. `install.py --status` shows what is installed |

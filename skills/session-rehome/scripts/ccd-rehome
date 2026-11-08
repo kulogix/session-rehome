@@ -53,12 +53,12 @@ given, and $CCD_REHOME_PROFILES (paths separated by ':', or ';' on Windows).
 Never signs in or out, never reads credentials, never copies or edits transcripts (~/.claude/projects/), never
 touches another profile. Writes only session records + their side files inside the profile, an archive before
 every change, and its own state dir. How to use it: ../SKILL.md. How it works: ../references/mechanics.md.
-Project, docs and issues: https://github.com/kulogix/claude-session-rehome
+Project, docs and issues: https://github.com/kulogix/session-rehome
 """
 import argparse, datetime, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
 
-VERSION = "0.9.3"
-PROJECT_URL = "https://github.com/kulogix/claude-session-rehome"
+VERSION = "0.10.0"
+PROJECT_URL = "https://github.com/kulogix/session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
 HOME = os.environ.get("CCD_REHOME_HOME") or os.path.expanduser("~")
@@ -1146,7 +1146,7 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
 
 # ---------------- CLI <-> Desktop ----------------
 def mangle(path):
-    """Claude Code's project-dir name for a cwd. A copy of claude-session-transporter's canonical scripts/mangle.py
+    """Claude Code's project-dir name for a cwd. A copy of session-transporter's canonical scripts/mangle.py
     (derived from the CLI); the self-test cross-checks the two whenever both skills are installed."""
     u16 = path.encode("utf-16-le")
     units = [u16[i] | (u16[i + 1] << 8) for i in range(0, len(u16), 2)]
@@ -1249,14 +1249,14 @@ def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_dri
         if mangle(cwd) != info["key"]:
             die(f"refusing: the CLI would not find this conversation from {cwd}: it is filed under {info['key']}, "
                 f"and that folder's key is {mangle(cwd)}. (Moving a conversation to another folder is "
-                f"claude-session-transporter's job.)")
+                f"session-transporter's job.)")
     else:
         cwd = info["cwd"]
         if not cwd:
             die(f"cannot tell which folder this conversation runs in (key {info['key']}); pass --cwd DIR")
     if not os.path.isdir(cwd):
         die(f"refusing: the conversation's folder {cwd} does not exist on this machine; recreate it (or move the "
-            f"conversation with claude-session-transporter), then re-run")
+            f"conversation with session-transporter), then re-run")
     now_ms = int(time.time() * 1000)
     rec = {"sessionId": f"local_{__import__('uuid').uuid4()}", "cliSessionId": info["cli"], "cwd": cwd,
            "originCwd": cwd, "createdAt": info["first_ms"] or now_ms, "lastActivityAt": info["last_ms"] or now_ms,
@@ -1506,7 +1506,7 @@ def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, ac
         rec["model"] = FALLBACK_MODEL
     if not transcript(rec["cliSessionId"]):
         say(f"  note: no transcript {rec['cliSessionId']}.jsonl under {short(PROJECTS)} yet: Desktop will list the "
-            f"session but cannot open it until the conversation is placed (claude-session-transporter does that)")
+            f"session but cannot open it until the conversation is placed (session-transporter does that)")
     here = os.path.join(dst, rec["sessionId"] + ".json")
     say(f"{p.name}: adopt {rec.get('title')!r} -> {email(reg, acct)} / org {org[:8]}  ({short(here)})")
     if note:
