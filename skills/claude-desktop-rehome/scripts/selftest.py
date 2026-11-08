@@ -559,7 +559,13 @@ try:
           and g3.get("title") == "Renamed in Desktop" and "restored" in out,
           "register after unregister restores the session's Desktop settings from the archive (nothing lost)")
     fake = os.path.join(home, "fakebin"); os.makedirs(fake)
-    open(os.path.join(fake, "claude"), "w").write("#!/bin/sh\necho '2.1.100 (Claude Code)'\n"); os.chmod(os.path.join(fake, "claude"), 0o755)
+    if sys.platform.startswith("win"):                  # Windows finds commands by extension (PATHEXT)
+        with open(os.path.join(fake, "claude.cmd"), "w") as f:
+            f.write("@echo 2.1.100 (Claude Code)\r\n")
+    else:
+        with open(os.path.join(fake, "claude"), "w") as f:
+            f.write("#!/bin/sh\necho '2.1.100 (Claude Code)'\n")
+        os.chmod(os.path.join(fake, "claude"), 0o755)
     open(tx, "a", encoding="utf-8").write(json.dumps({"type": "assistant", "uuid": "a2", "version": "2.1.295",
                                                       "entrypoint": "claude-desktop"}) + "\n")
     rc, out = run(home, "resume-cli", "acct-reg", "--only", os.path.basename(glob.glob(os.path.join(rd, "local_*.json"))[0])[6:14],
@@ -568,10 +574,15 @@ try:
           "resume-cli warns when the terminal CLI is signed in to a different account than the Desktop session")
     check("2.1.100" in out and "2.1.295" in out and "older" in out,
           "resume-cli warns when the terminal CLI is older than the one that last wrote the conversation")
-    rc, out = run(home, "resume-cli", "acct-reg", "--only", os.path.basename(glob.glob(os.path.join(rd, "local_*.json"))[0])[6:14],
-                  env={"CLAUDE_CODE_ENTRYPOINT": "claude-desktop"})
+    rid = os.path.basename(glob.glob(os.path.join(rd, "local_*.json"))[0])[6:14]
+    rc, out = run(home, "resume-cli", "acct-reg", "--only", rid, env={"CLAUDE_CODE_ENTRYPOINT": "claude-desktop",
+                                                                     "CCD_REHOME_PLATFORM": "linux"})
     check(rc == 0 and "inside a Desktop session" in out and "env -i" in out,
           "resume-cli warns when run from inside a Desktop session (the child would be stamped as Desktop) and shows a clean-env command")
+    rc, out = run(home, "resume-cli", "acct-reg", "--only", rid, env={"CLAUDE_CODE_ENTRYPOINT": "claude-desktop",
+                                                                     "CCD_REHOME_PLATFORM": "win32"})
+    check(rc == 0 and "inside a Desktop session" in out and "new terminal" in out and "env -i" not in out,
+          "on Windows too, it warns inside a Desktop session, with a remedy that works there (a new terminal, no env -i)")
     CLI2 = "c2c2c2c2-0000-4000-8000-000000000002"
     gone = os.path.join(home, "Projects", "moved-away")
     p2 = os.path.join(home, ".claude", "projects", cr2.mangle(gone)); os.makedirs(p2)

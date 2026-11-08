@@ -38,7 +38,7 @@ def read_text(path):
     if b"\0" in raw[:4096]:
         return None
     try:
-        return raw.decode("utf-8")
+        return raw.decode("utf-8").replace("\r\n", "\n")      # a CRLF checkout must not change what tests see
     except UnicodeDecodeError:
         return None
 

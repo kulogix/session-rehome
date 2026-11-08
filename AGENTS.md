@@ -33,8 +33,9 @@ The rules that matter most (each SKILL.md has the full list and the reasons):
   transporter's SKILL.md); ask them in chat before the first write.
 - **Start a terminal leg in a clean environment.** A `claude` started from a shell inside a Claude Desktop
   session inherits Desktop's environment and is recorded as Desktop. Use
-  `env -i HOME="$HOME" USER="$USER" PATH="$PATH" TERM="$TERM" claude ...` (`ccd-rehome resume-cli` prints this
-  form when it detects the problem).
+  `env -i HOME="$HOME" USER="$USER" PATH="$PATH" TERM="$TERM" claude ...` on macOS and Linux; on Windows, ask the
+  user to run it in a new terminal window. `ccd-rehome resume-cli` prints the right form when it detects the
+  problem.
 
 ## Job 2: you are CHANGING this repository
 

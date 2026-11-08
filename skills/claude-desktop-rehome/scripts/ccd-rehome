@@ -57,7 +57,7 @@ Project, docs and issues: https://github.com/kulogix/claude-session-rehome
 """
 import argparse, datetime, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 PROJECT_URL = "https://github.com/kulogix/claude-session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
@@ -1353,14 +1353,19 @@ def resume_cli(p, reg, only):
     q = (lambda x: '"' + x + '"') if WIN else (lambda x: "'" + x.replace("'", "'\\''") + "'")
     say(f"{rec.get('title')!r}: continue it in the terminal with")
     say(f"  cd {q(cwd)} && claude --resume {cli}")
-    if os.environ.get("CLAUDE_CODE_ENTRYPOINT") and not WIN:
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
         # Measured: a `claude` started from a shell inside a Desktop session inherits Desktop's environment
         # (CLAUDE_CODE_ENTRYPOINT=claude-desktop, the host session id, a messaging socket, ...), so its turns are
         # stamped as Desktop turns and it runs as that session's child. Run it from a real terminal, or clean:
         say(f"  WARNING: this is running inside a Desktop session ({os.environ['CLAUDE_CODE_ENTRYPOINT']}): a "
-            f"`claude` started from here inherits Desktop's environment. Run the command in a real terminal, or:")
-        say(f"  cd {q(cwd)} && env -i HOME=\"$HOME\" USER=\"$USER\" PATH=\"$PATH\" TERM=xterm-256color "
-            f"claude --resume {cli}")
+            f"`claude` started from here inherits Desktop's environment.")
+        if WIN:                                    # no `env -i` there: a fresh window is the clean environment
+            say("  Open a new terminal window from the Start menu (not from inside Desktop) and run the command "
+                "above there.")
+        else:
+            say("  Run the command in a real terminal, or with a clean environment:")
+            say(f"  cd {q(cwd)} && env -i HOME=\"$HOME\" USER=\"$USER\" PATH=\"$PATH\" TERM=xterm-256color "
+                f"claude --resume {cli}")
     # ---- the things that bite when a Desktop session continues in a terminal
     try:
         oa = load(os.path.join(HOME, ".claude.json")).get("oauthAccount") or {}

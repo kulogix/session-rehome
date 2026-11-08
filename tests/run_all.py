@@ -35,8 +35,15 @@ def main():
             passed = out.count("  PASS ")
             failed = [l.strip() for l in out.splitlines() if l.startswith("  FAIL ")]
             print(f"== {name} self-test: {passed} passed, {len(failed)} failed  ({time.time() - t0:.0f}s)")
-            for f in failed:
-                print("   " + f)
+            detail = False
+            for line in out.splitlines():           # each FAIL, with the tool output SELFTEST_VERBOSE adds under it
+                if line.startswith("  FAIL "):
+                    print("   " + line.strip())
+                    detail = True
+                elif detail and line.startswith("    |"):
+                    print("   " + line)
+                else:
+                    detail = False
             if p.returncode and not failed:
                 print("\n".join("   | " + l for l in out.splitlines()[-25:]))
             results.append(p.returncode == 0)

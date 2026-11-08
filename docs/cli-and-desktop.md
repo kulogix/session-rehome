@@ -35,9 +35,9 @@ ccd-rehome unregister default --only 1a2b3c4d
 ```
 
 **Start that terminal command in a normal terminal, not in a shell inside Claude Desktop.** A `claude` started
-inside a Desktop session inherits Desktop's environment and is recorded as Desktop. If you must, start it with a
-clean environment: `env -i HOME="$HOME" USER="$USER" PATH="$PATH" TERM="$TERM" claude --resume ID`.
-`resume-cli` warns you when it detects this.
+inside a Desktop session inherits Desktop's environment and is recorded as Desktop. On macOS and Linux you can
+also start it with a clean environment: `env -i HOME="$HOME" USER="$USER" PATH="$PATH" TERM="$TERM" claude --resume
+ID`. On Windows, open a new terminal window from the Start menu. `resume-cli` warns you when it detects this.
 
 **Never have the same session open in both at once.** Two writers fork its history.
 

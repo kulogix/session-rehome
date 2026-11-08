@@ -1,0 +1,3 @@
+# Every text file is checked out with LF line endings, on every OS. Shell scripts break under CRLF (bash in WSL
+# or Git Bash reads `$'\r'`), and the SKILL.md frontmatter must start with exactly "---\n".
+* text=auto eol=lf

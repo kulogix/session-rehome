@@ -4,6 +4,23 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.9.1 — 2026-11-07
+
+Fixes from the first CI run on Windows (Windows remains experimental).
+
+- **`ccd-rehome resume-cli` warns inside a Desktop session on Windows too.** It used to stay silent there, because
+  its remedy (`env -i`) does not exist on Windows. The hazard does: a `claude` started from a shell inside Desktop
+  inherits Desktop's environment. On Windows the remedy is now a new terminal window. New self-test check, which
+  runs the Windows branch on every OS.
+- **Line endings:** `.gitattributes` keeps every text file LF on checkout, on every OS. A Windows checkout had
+  turned them into CRLF, which broke the SKILL.md frontmatter and the shell scripts under Git Bash.
+- **Tests:** the self-test's stand-in `claude` is a `.cmd` file on Windows, so the "older CLI" warning is tested
+  there too; the repository tests read CRLF files the same as LF; `tests/run_all.py` prints the tool output under
+  each failing self-test check, so a CI log shows why. CI uses the current major versions of its actions.
+
+**Tested:** `python3 tests/run_all.py` on Linux (rehome self-test 112/112, transporter 39/39, repository tests).
+Windows results come from CI.
+
 ## 0.9.0 — 2026-11-07
 
 The first release of **claude-session-rehome**, which joins two projects into one: the account and window tool
