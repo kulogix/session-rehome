@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test for session-transporter's bundle path and the st-transplant.py / st-verify.sh fixes.
+"""Self-test for claude-session-transporter's bundle path and the st-transplant.py / st-verify.sh fixes.
 
 Builds two synthetic machines in a temp dir (an ORIGIN home with a session, sidecars, memory, tasks, a sibling
 key, decoy credentials and secret-looking project files; a DESTINATION home with a Desktop profile) and checks
@@ -237,6 +237,26 @@ try:
           "without rsync (Windows path, ST_NO_RSYNC=1) the pure-Python copy installs the same; --no-memory honoured")
     check(oct(os.stat(os.path.join(dest2, "src", "fib.py")).st_mode & 0o777) in ("0o644", "0o600", "0o640")
           or sys.platform.startswith("win"), "copied files are writable and not group/world-writable")
+
+    print("legacy CLAUDE.md marker (projects migrated before the rename)")
+    HL = os.path.join(root, "dest-legacy"); chl = os.path.join(HL, ".claude"); os.makedirs(chl)
+    destl = os.path.join(HL, "fib"); os.makedirs(destl)
+    open(os.path.join(destl, "CLAUDE.md"), "w", encoding="utf-8").write(
+        f"<!-- BEGIN session-transporter relocation notice: {SID} -->\nold table\n"
+        f"<!-- END session-transporter relocation notice: {SID} -->\n\n# user notes\nkeep me\n")
+    rc, o = py(BUNDLE, "import", out, "--dest-root", destl, "--claude-home", chl, "--staging",
+               os.path.join(HL, "staging"), "--apply", home=HL)
+    cm = open(os.path.join(destl, "CLAUDE.md"), encoding="utf-8").read()
+    check(rc == 0 and cm.count("relocation notice: " + SID) == 2 and "BEGIN claude-session-transporter" in cm
+          and "BEGIN session-transporter" not in cm and "old table" not in cm and "keep me" in cm,
+          "a block written under the old skill name is REPLACED (upgraded), not duplicated; user text kept")
+    if shutil.which("bash"):
+        open(os.path.join(destl, "CLAUDE.md"), "w", encoding="utf-8").write(
+            f"<!-- BEGIN session-transporter relocation notice: {SID} -->\nold\n<!-- END session-transporter relocation notice: {SID} -->\n")
+        stl = os.path.join(HL, "staging"); stl = os.path.join(stl, os.listdir(stl)[0])
+        rc, o = run(["bash", VERIFY, "--checkpoint", stl, "--dest-root", destl, "--session-id", SID, "--claude-home", chl,
+                     "--no-probe", "--no-tree-check"], HL)
+        check("CLAUDE.md carries this session's" in o, "st-verify.sh recognises a block written under the old skill name")
 
     print("st-transplant.py settings fix")
     stg = os.path.join(HB, "staging"); stg = os.path.join(stg, os.listdir(stg)[0])

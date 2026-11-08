@@ -1,4 +1,4 @@
-# session-transporter / scripts
+# claude-session-transporter / scripts
 
 Six drivers plus four helpers. They move a Claude Code session — transcript, sidecars,
 memory, task store, project tree — from one host/account to another, and prove afterwards

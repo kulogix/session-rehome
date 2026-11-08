@@ -71,11 +71,21 @@ def mark_begin(sid):
     # keep their path table. A single global marker pair meant the second run's re.sub
     # replaced the first run's block, and the durable half of the relocation message is
     # the only half that survives compaction.
-    return "<!-- BEGIN session-transporter relocation notice: %s -->" % sid
+    return "<!-- BEGIN claude-session-transporter relocation notice: %s -->" % sid
 
 
 def mark_end(sid):
-    return "<!-- END session-transporter relocation notice: %s -->" % sid
+    return "<!-- END claude-session-transporter relocation notice: %s -->" % sid
+
+
+# Blocks written before the skill was renamed (session-transporter -> claude-session-transporter). They are
+# recognised and upgraded in place, never duplicated: a project migrated earlier keeps exactly one block.
+LEGACY_NAMES = ("session-transporter",)
+
+
+def legacy_marks(sid):
+    return [("<!-- BEGIN %s relocation notice: %s -->" % (n, sid), "<!-- END %s relocation notice: %s -->" % (n, sid))
+            for n in LEGACY_NAMES]
 
 
 # ------------------------------------------------------------------ small helpers
@@ -441,7 +451,7 @@ def claude_md_block(sid, moves, origin_desc, dest_desc, ckpt, counts, extra):
     return """%s
 # Relocated workspace — session %s
 
-This tree was migrated by `session-transporter`.
+This tree was migrated by `claude-session-transporter`.
 
   origin   %s
   current  %s
@@ -1064,9 +1074,11 @@ def main():
     mb, me = mark_begin(dest_sid), mark_end(dest_sid)
     if os.path.isfile(cmd_path):
         cur = open(cmd_path).read()
-        if mb in cur and me in cur:
-            new = re.sub(re.escape(mb) + r".*?" + re.escape(me), lambda _m: block, cur, flags=re.S)
-            R.ok("replaced this session's block in CLAUDE.md (other sessions' blocks kept)")
+        found = next(((b_, e_) for b_, e_ in [(mb, me)] + legacy_marks(dest_sid) if b_ in cur and e_ in cur), None)
+        if found:
+            new = re.sub(re.escape(found[0]) + r".*?" + re.escape(found[1]), lambda _m: block, cur, flags=re.S)
+            R.ok("replaced this session's block in CLAUDE.md (other sessions' blocks kept)"
+                 + ("" if found[0] == mb else "; upgraded it from the pre-rename marker"))
         else:
             new = block + "\n\n" + cur
             R.ok("prepended this session's block to the existing CLAUDE.md (kept intact)")

@@ -1,5 +1,5 @@
 ---
-name: session-transporter
+name: claude-session-transporter
 description: >-
   Migrate, transplant, clone, fork, mirror or rescue a Claude Code session, project and
   history across machines or accounts — "take over this session on another computer", "move
@@ -125,7 +125,7 @@ Six commands. Everything else in this file explains why each one refuses what it
 the profile**.
 
 ```bash
-SK=~/.claude/skills/session-transporter/scripts
+SK=~/.claude/skills/claude-session-transporter/scripts
 
 # 0. DISCOVERY — you do not know the session id. Nobody does; it is a uuid inside a
 #    directory whose name the mangler makes unguessable.
@@ -179,7 +179,7 @@ there" case, and for any move between operating systems. It is the same procedur
 ssh needed on either side.
 
 ```bash
-SK=~/.claude/skills/session-transporter/scripts
+SK=~/.claude/skills/claude-session-transporter/scripts
 # ON THE ORIGIN. --dry-run first: it prints the accounting and writes nothing.
 python3 "$SK/st-bundle.py" export --session-id <SID> --project-root <DIR> \
     --exclude '/.pytest_cache/  # regenerated' [--no-memory] [--desktop-profile acct-x] -o s.csb.zip --dry-run

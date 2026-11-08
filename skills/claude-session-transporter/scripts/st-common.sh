@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# st-common.sh — shared helpers for the session-transporter scripts.
+# st-common.sh — shared helpers for the claude-session-transporter scripts.
 # SOURCE this file; do not execute it.
 #
 # Written for bash 3.2 (the macOS system bash) as well as bash 5: no associative

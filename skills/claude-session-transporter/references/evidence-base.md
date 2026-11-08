@@ -1,4 +1,4 @@
-<!-- shipped with the session-transporter skill -->
+<!-- shipped with the claude-session-transporter skill -->
 
 > **What this file is.** The distilled evidence base of the source migration — the one
 > completed cross-host, cross-account move this skill was built from. It is a **historical
@@ -17,7 +17,7 @@
 > Evidence tags used throughout: `[M]` measured · `[C]` lifted from code · `[D]` derived ·
 > `[I]` inferred · `[LIVE]` re-verified on disk while writing.
 
-# SKILL-SOURCE-FACTS — evidence base for `session-transporter`
+# SKILL-SOURCE-FACTS — evidence base for `claude-session-transporter`
 
 Harvested 2026-08-01 from a **completed, working** cross-host / cross-account Claude Code session
 migration. This file is the skill's evidence base. It replaces reading the 113k words of recon.

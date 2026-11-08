@@ -278,12 +278,12 @@ fi
 st_banner "4  DURABLE RELOCATION MESSAGE"
 CMD="$ST_DEST_ROOT/CLAUDE.md"
 if [ -f "$CMD" ]; then
-  if grep -q "BEGIN session-transporter relocation notice: $SID" "$CMD" 2>/dev/null; then
+  if grep -q -E "BEGIN (claude-)?session-transporter relocation notice: $SID" "$CMD" 2>/dev/null; then
     st_ok "CLAUDE.md carries this session's transporter block ($(st_size "$CMD") bytes)"
     st_ok "  this is the half of the message that survives compaction — the appended notice does not"
-    NBLOCK=$(grep -c 'BEGIN session-transporter relocation notice' "$CMD")
+    NBLOCK=$(grep -c -E 'BEGIN (claude-)?session-transporter relocation notice' "$CMD")
     [ "$NBLOCK" -gt 1 ] && st_info "  $NBLOCK sessions have been migrated into this root; each keeps its own block"
-  elif grep -q 'BEGIN session-transporter relocation notice' "$CMD" 2>/dev/null; then
+  elif grep -q -E 'BEGIN (claude-)?session-transporter relocation notice' "$CMD" 2>/dev/null; then
     st_bad "CLAUDE.md has a transporter block, but not one for $SID"
   else
     st_bad "CLAUDE.md exists but has no transporter block"

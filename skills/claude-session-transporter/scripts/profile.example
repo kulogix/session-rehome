@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session-transporter profile — a plain shell file, sourced by every st-* script
+# claude-session-transporter profile — a plain shell file, sourced by every st-* script
 # (`--profile FILE`). COMMAND-LINE FLAGS ALWAYS WIN over what is set here: each script
 # sources the profile before parsing its arguments, so a flag you type overrides it.
 #

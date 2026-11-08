@@ -29,7 +29,7 @@ stands for that path.
 | "move these sessions to account X" | `R sessions P` (get ids), then `R move P --to X --only ID ... --dry-run`, then without `--dry-run` |
 | "fix all my windows" | `R rehome --all` |
 | "undo that" | `R rollback P ARCHIVE` (the name the move printed) |
-| put a session record into a profile on ANOTHER machine (with session-transporter) | `R export-record P --only ID --out r.json` here; `R adopt P2 --record r.json --cwd NEW_DIR` there (the transporter's bundle does both for you) |
+| put a session record into a profile on ANOTHER machine (with claude-session-transporter) | `R export-record P --only ID --out r.json` here; `R adopt P2 --record r.json --cwd NEW_DIR` there (the transporter's bundle does both for you) |
 | "move this session to my other Desktop window" (another user-data-dir, same machine) | `R move P --only ID --to-profile P2 [--to EMAIL] --dry-run`, then without `--dry-run` (both quit) |
 | "show my terminal (CLI) sessions in Desktop" | `R cli-sessions`, then `R register P --cli-session-id ID` (never Desktop's "Recover CLI sessions") |
 | "continue this Desktop session in the terminal" | `R resume-cli P --only ID` (prints the checked command); `R unregister P --only ID` to drop the Desktop record too |
@@ -145,7 +145,7 @@ converting never edits a transcript:
   record with title and times taken from the transcript, and files it through `adopt` (validated,
   idempotent, archived, undoable). Desktop then lists it; opening it resumes it with Desktop's CLI.
 - **Never use Desktop's own "Recover CLI sessions" import** on a real conversation. It rewrites the
-  transcript in place and strips its thinking content (session-transporter, prohibition 1). `register` is
+  transcript in place and strips its thinking content (claude-session-transporter, prohibition 1). `register` is
   the safe replacement.
 - **Desktop → CLI: `resume-cli`** prints `cd <folder> && claude --resume <id>` after checking the
   conversation is not open in any process (two writers fork the history). The session stays listed in
@@ -175,12 +175,12 @@ converting never edits a transcript:
   Desktop inherits its environment: it was stamped `claude-desktop` and ran as that session's child.
   `resume-cli` warns and prints an `env -i` form. The
   Desktop-made Fibonacci transcript was loaded by plain CLIs on macOS (2.1.119) and Linux arm64 (2.1.121).
-- **The `mangle()` copy** in the script mirrors session-transporter's canonical `mangle.py`; the self-test
+- **The `mangle()` copy** in the script mirrors claude-session-transporter's canonical `mangle.py`; the self-test
   cross-checks them whenever both are installed.
 
 ## The transplant interface: `export-record` / `adopt`
 
-session-transporter moves *conversations* between machines; this tool owns *Desktop records*. They meet here:
+claude-session-transporter moves *conversations* between machines; this tool owns *Desktop records*. They meet here:
 - **`export-record`** writes one record as `ccd-record/1`: `{format, tool, desktop, exported_utc, record,
   notes}`. Account-bound and transient fields are stripped, and it carries no account or org ids.
 - **`adopt`** files such a record into any profile: by default under the signed-in account, or under `--to`
@@ -306,4 +306,4 @@ A fork fixes one machine once and leaves every other copy broken. A workaround h
   - `CCD_REHOME_FALLBACK_MODEL` / `CCD_REHOME_LOCAL_MODEL_RE`: the model rewrite.
   - `CCD_REHOME_HOME`, `CCD_REHOME_SANDBOX`, `CCD_REHOME_PLATFORM`: tests only.
 - **Related:** moving sessions to *another machine* is a different job (transcripts and paths change); if a
-  cross-machine transplant skill such as `session-transporter` is installed, use that.
+  cross-machine transplant skill such as `claude-session-transporter` is installed, use that.
