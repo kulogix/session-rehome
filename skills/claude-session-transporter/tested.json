@@ -1,0 +1,52 @@
+{
+  "about": "Combinations of the transporter (st-bundle and the st-* scripts) x OS that passed. One entry per run and per side: role `export` ran on the origin machine, role `import` on the destination. `verified` lists what actually ran: selftest = the synthetic suite; export / import / inspect = st-bundle.py subcommands; verify = st-verify.sh (prefix hash, sidecars, and a load of the transcript by the real CLI against a local mock API, so no turn is spent); origin-proof = the destination checked the origin's hash. Add yours with a pull request (https://github.com/kulogix/claude-session-rehome/blob/main/CONTRIBUTING.md).",
+  "tested": [
+    {
+      "tool": "0.1.0",
+      "role": "export",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "arch": "x86_64",
+      "python": "3.14.6",
+      "date": "2026-11-07",
+      "verified": [
+        "selftest",
+        "export",
+        "origin-proof"
+      ],
+      "notes": "origin of the two imports below"
+    },
+    {
+      "tool": "0.1.0",
+      "role": "import",
+      "os_family": "macOS",
+      "os": "macOS 26.6.2",
+      "arch": "arm64",
+      "python": "3.9.6",
+      "from_os_family": "Linux",
+      "date": "2026-11-07",
+      "verified": [
+        "import",
+        "verify",
+        "origin-proof"
+      ],
+      "notes": "imported into a temporary folder; transplant OK with 5 warnings; verify PASS (transcript LOADED)"
+    },
+    {
+      "tool": "0.1.0",
+      "role": "import",
+      "os_family": "Linux",
+      "os": "Debian GNU/Linux 13",
+      "arch": "aarch64",
+      "python": "3.13.5",
+      "from_os_family": "Linux",
+      "date": "2026-11-07",
+      "verified": [
+        "import",
+        "verify",
+        "origin-proof"
+      ],
+      "notes": "Raspberry Pi; imported into a temporary folder; transplant OK with 1 warning; verify PASS"
+    }
+  ]
+}

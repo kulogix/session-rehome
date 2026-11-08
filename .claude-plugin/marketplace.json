@@ -1,0 +1,17 @@
+{
+  "name": "kulogix",
+  "owner": {
+    "name": "kulogix",
+    "url": "https://github.com/kulogix"
+  },
+  "description": "Claude Code plugins by kulogix.",
+  "plugins": [
+    {
+      "name": "session-rehome",
+      "source": "./",
+      "description": "Move Claude Code and Claude Desktop sessions between accounts, Desktop windows, the terminal CLI and Desktop, and other machines, without losing history.",
+      "category": "productivity",
+      "tags": ["claude-desktop", "sessions", "accounts", "migration"]
+    }
+  ]
+}

@@ -94,6 +94,10 @@ def free_space(path):
             "total_bytes": st.f_blocks * st.f_frsize}
 
 
+# Opening words the CLI writes itself; they say nothing about which conversation this is.
+BOILERPLATE = ("This session is being continued from a previous conversation",)
+
+
 def first_user_text(path, limit=160):
     """Opening words of the first real user message — the only thing that lets a human
     recognise which conversation a uuid belongs to."""
@@ -120,11 +124,58 @@ def first_user_text(path, limit=160):
                             txt = blk.get("text") or ""
                             break
                 txt = " ".join((txt or "").split())
-                if txt and not txt.startswith("<"):
+                if txt and not txt.startswith("<") and not txt.startswith(BOILERPLATE):
                     return txt[:limit]
     except (IOError, OSError):
         pass
     return ""
+
+
+def transcript_hints(path, head_lines=400, tail_bytes=262144):
+    """The working folder and the title of a transcript, from its first lines and its last 256 KiB only (never the
+    whole file). The folder is the NEWEST record's `cwd`: a transplanted transcript's first records still name the
+    origin machine's folder. The title is the last `custom-title`, else the last `summary`."""
+    cwd, last_cwd, titles, summaries = None, [None], [], []
+
+    def take(d):
+        if isinstance(d.get("cwd"), str):
+            last_cwd[0] = d["cwd"]
+        if d.get("type") == "custom-title" and d.get("customTitle"):
+            titles.append(str(d["customTitle"]))
+        elif d.get("type") == "summary" and d.get("summary"):
+            summaries.append(str(d["summary"]))
+    try:
+        with io.open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(head_lines):
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    d = json.loads(line)
+                except Exception:                                # noqa: BLE001
+                    continue
+                if not isinstance(d, dict):
+                    continue
+                if cwd is None and isinstance(d.get("cwd"), str):
+                    cwd = d["cwd"]
+                take(d)
+        size = os.path.getsize(path)
+        if size > tail_bytes:
+            with io.open(path, "rb") as fh:
+                fh.seek(size - tail_bytes)
+                tail = fh.read().split(b"\n")[1:]               # the first piece is a partial line
+            for raw in tail:
+                if b'"custom-title"' in raw or b'"summary"' in raw or b'"cwd"' in raw:
+                    try:
+                        d = json.loads(raw.decode("utf-8", "replace"))
+                    except Exception:                            # noqa: BLE001
+                        continue
+                    if isinstance(d, dict):
+                        take(d)
+    except (IOError, OSError):
+        pass
+    title = (titles or summaries or [None])[-1]
+    return {"cwd": last_cwd[0] or cwd, "title": " ".join(title.split())[:120] if title else None}
 
 
 def scan_transcript(path, deep, sample_lines):
@@ -264,6 +315,7 @@ def list_sessions(claude_home, limit):
                 "has_tasks": os.path.isdir(os.path.join(claude_home, "tasks", sid)),
                 "first_user_message": first_user_text(p),
             })
+            rows[-1].update(transcript_hints(p))
     rows.sort(key=lambda r: -r["mtime"])
     return rows[:limit] if limit else rows
 

@@ -52,11 +52,13 @@ given, and $CCD_REHOME_PROFILES (paths separated by ':', or ';' on Windows).
 
 Never signs in or out, never reads credentials, never copies or edits transcripts (~/.claude/projects/), never
 touches another profile. Writes only session records + their side files inside the profile, an archive before
-every change, and its own state dir. See ../README.md and ../references/mechanics.md.
+every change, and its own state dir. How to use it: ../SKILL.md. How it works: ../references/mechanics.md.
+Project, docs and issues: https://github.com/kulogix/claude-session-rehome
 """
 import argparse, datetime, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
+PROJECT_URL = "https://github.com/kulogix/claude-session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
 HOME = os.environ.get("CCD_REHOME_HOME") or os.path.expanduser("~")
@@ -76,7 +78,6 @@ DEFAULT_PROFILE = (os.path.join(HOME, "Library", "Application Support", "Claude"
                    else os.path.join(HOME, ".config", "Claude"))
 # macOS Electron apps log to ~/Library/Logs/<App>; that dir may be shared by every instance of the app
 MAC_LOGS = os.path.join(HOME, "Library", "Logs", "Claude")
-SUPPORT = "verified" if PLATFORM.startswith("linux") else "experimental (untested on this OS)"
 SANDBOX = os.environ.get("CCD_REHOME_SANDBOX") == "1"      # self-test: no process scans, no real launches
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 ARCH_RE = re.compile(r"\d{8}T\d{6}Z-(move|rehome|adopt|unregister|pre-rollback)")
@@ -797,6 +798,20 @@ def tested():
         return []
 
 
+LIVE_CHECKS = {"move", "rehome", "rollback", "adopt", "register", "unregister", "launch", "verify", "quit"}
+
+
+def support_level():
+    """How far this OS family has been verified, from tested.json: 'verified' (live moves ran and were checked),
+    'read-only checks only', or 'untested'. Derived, never hardcoded, so a new report changes it."""
+    fam = "macOS" if MAC else "Windows" if WIN else "Linux"
+    ran = set()
+    for r in tested():
+        if r.get("os_family") == fam:
+            ran.update(str(c).split()[0] for c in r.get("verified", []) if str(c).strip())
+    return "verified" if ran & LIVE_CHECKS else "read-only checks only" if ran else "untested"
+
+
 def compat_note(dv):
     """None if this tool version + Desktop version + OS family is in tested.json, else a one-line warning."""
     fam = "macOS" if MAC else "Windows" if WIN else "Linux"
@@ -1062,7 +1077,7 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
                 say(f"    NOTE   {cn}")
         if errors:
             die("refusing: the files are not in the format this tool knows; nothing was changed. "
-                "See SKILL.md \"Maintaining this skill\" (or report it: CONTRIBUTING.md)")
+                f"See SKILL.md \"Maintaining this skill\" (or report it: {PROJECT_URL}/issues)")
         if drift and not accept_drift and not DRY:
             die("refusing: Desktop stores something this tool does not know yet (DRIFT above); nothing was changed.\n"
                 "  Review it with --dry-run. If you are sure it is safe, re-run with --accept-drift. Either way, please "
@@ -1585,7 +1600,8 @@ def doctor():
         ok = ok and good is not False
         mark = "ok  " if good else ("WARN" if good is None else "FAIL")
         say(f"  [{mark}] {what}" + (f"\n         -> {hint}" if hint and not good else ""))
-    say(f"ccd-rehome {VERSION} doctor  ({os_version()}, support: {SUPPORT})")
+    level = support_level()
+    say(f"ccd-rehome {VERSION} doctor  ({os_version()}, this OS: {level})")
     line(sys.version_info >= (3, 9), f"Python {sys.version.split()[0]}", "needs Python 3.9 or newer")
     line(True, f"sqlite3 {sqlite3.sqlite_version}")
     line(os.path.isdir(DEFAULT_PROFILE) or None, f"default Desktop profile {short(DEFAULT_PROFILE)}",
@@ -1647,9 +1663,8 @@ def doctor():
     dv = desktop_version(found)
     cn = compat_note(dv)
     line(None if cn else True, f"Desktop {dv or '?'}: " + ("in tested.json" if not cn else "not in tested.json"),
-         (cn or "") + ". Submitting a report helps everyone: CONTRIBUTING.md")
-    line(None if not PLATFORM.startswith("linux") else True,
-         "platform verified" if PLATFORM.startswith("linux") else "platform not verified on this OS",
+         (cn or "") + f". Submitting a report helps everyone: {PROJECT_URL}/blob/main/CONTRIBUTING.md")
+    line(True if level == "verified" else None, f"this OS: {level} (from tested.json)",
          "run `python3 -I selftest.py`, then use --dry-run and `verify` on your first real move")
     say("  ready" if ok else "  not ready: fix the FAIL lines above")
     sys.exit(0 if ok else 1)
@@ -1688,13 +1703,11 @@ def main():
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError):
             pass
-    if sys.argv[1:2] == ["doctor"]:
-        return doctor()
     ap = argparse.ArgumentParser(prog="ccd-rehome", usage=__doc__.split("\n\n")[1],
                                  description="\n\n".join(__doc__.split("\n\n")[2:]),
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=("profiles", "status", "sessions", "accounts", "rehome", "move", "rollback",
-                                    "quit", "launch", "verify", "report", "export-record", "adopt",
+                                    "quit", "launch", "verify", "doctor", "report", "export-record", "adopt",
                                     "cli-sessions", "register", "resume-cli", "unregister"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--all", action="store_true"); ap.add_argument("--dry-run", action="store_true")
@@ -1706,6 +1719,8 @@ def main():
     ap.add_argument("--cli-session-id"); ap.add_argument("--title")
     ap.add_argument("--version", action="version", version=f"ccd-rehome {VERSION}")
     o = ap.parse_args()
+    if o.cmd == "doctor":                           # before anything below writes state: doctor writes nothing
+        return doctor()
     DRY = o.dry_run
     if not DRY:
         os.makedirs(STATE, 0o700, exist_ok=True)

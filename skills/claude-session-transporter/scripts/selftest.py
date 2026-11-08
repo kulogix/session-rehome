@@ -126,8 +126,19 @@ try:
     out = os.path.join(root, "fib.csb.zip")
     EX = ["--exclude", "/build/  # build output, regenerated"]
 
-    print("export")
+    print("list (finding the session id)")
     h0 = tree_hash(HA)
+    rc, o = py(BUNDLE, "list", "--claude-home", ch, home=HA)
+    check(rc == 0 and SID in o and "fib project" in o and "Fibonacci CLI" in o and "make a fibonacci cli" in o,
+          "list shows each session's full id, folder, title and opening words")
+    rc, o = py(BUNDLE, "list", "--claude-home", ch, "--json", home=HA)
+    rows = json.loads(o).get("sessions", []) if rc == 0 else []
+    mine = [r for r in rows if r.get("session_id") == SID]
+    check({r.get("session_id") for r in rows} == {SID, "99999999-2222-4333-8444-555555555555"} and mine
+          and mine[0].get("cwd") == proj and mine[0].get("title") == "Fibonacci CLI" and tree_hash(HA) == h0,
+          "list --json: every transcript, with cwd and title; it writes nothing")
+
+    print("export")
     rc, o = py(BUNDLE, "export", "--session-id", SID, "--claude-home", ch, *EX, "--desktop-profile", "acct-o",
                "-o", out, "--dry-run", home=HA)
     check(rc == 0 and tree_hash(HA) == h0 and not os.path.exists(out), "export --dry-run writes nothing")

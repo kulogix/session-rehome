@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """st-bundle.py: pack ONE Claude Code session into a single portable, hash-verified file, and install it anywhere.
 
+  st-bundle.py list     [--claude-home DIR] [--limit N] [--json]   every session here: the id to export, its
+                        folder, title and opening words, newest first (start here: nobody knows a session id)
   st-bundle.py export   --session-id SID [-o FILE] [--claude-home DIR] [--project-root DIR | --no-project]
                         [--origin-key=KEY] [--no-memory] [--exclude 'PAT  # why' ...] [--exclude-file F]
                         [--include-sensitive] [--desktop-profile P [--record-id ID] | --no-record] [--dry-run]
@@ -23,7 +25,7 @@ Never edits a transcript. Never reads or packs credentials, ~/.claude.json, hist
 import argparse, datetime, glob, hashlib, io, json, os, platform, re, shutil, subprocess, sys, tempfile, unicodedata
 import zipfile
 
-VERSION = "0.1.0"
+VERSION = "0.9.0"
 FORMAT = "claude-session-bundle/1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -42,6 +44,45 @@ WIN_RESERVED = re.compile(r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$", re.I)
 
 
 def say(m=""): print(m, flush=True)
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+
+
+def tilde(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path and (path == home or path.startswith(home + os.sep)) else path
+
+
+def list_sessions(a):
+    """Every transcript in this machine's Claude home, newest first: what a human needs to say "that one"."""
+    import st_origin_probe as probe          # the same lister st-preflight.sh ships over ssh
+    ch = os.path.abspath(os.path.expanduser(a.claude_home))
+    rows = probe.list_sessions(ch, a.limit)
+    if a.json:
+        print(json.dumps({"claude_home": ch, "sessions": rows}, indent=2, ensure_ascii=False))
+        return
+    if not rows:
+        say(f"no sessions found under {tilde(os.path.join(ch, 'projects'))}")
+        return
+    say(f"sessions in {tilde(ch)}, newest first. Pass the id to: st-bundle.py export --session-id ID")
+    for r in rows:
+        when = datetime.datetime.fromtimestamp(r["mtime"]).strftime("%Y-%m-%d %H:%M")
+        where = tilde(r.get("cwd")) if r.get("cwd") else f"(folder unknown; key {r['project_key']})"
+        if r.get("cwd") and mangle(r["cwd"]) != r["project_key"]:
+            where += f"   [filed under {r['project_key']}: resume it from the folder that key names]"
+        say(f"  {r['session_id']}  {when}  {human_size(r['bytes']):>9}  {where}")
+        hint = []
+        if r.get("title"):
+            hint.append(f"title: {r['title']}")
+        if r.get("first_user_message"):
+            hint.append('"' + r["first_user_message"][:100] + '"')
+        if hint:
+            say("      " + "   ".join(hint))
 def die(m): sys.exit(f"st-bundle: {m}")
 def now(): return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
@@ -568,6 +609,10 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"st-bundle {VERSION}")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    ls = sub.add_parser("list", help="every session on this machine (the id to export), newest first")
+    ls.add_argument("--claude-home", default=os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
+    ls.add_argument("--limit", type=int, default=30, help="how many (0 = all; default 30)")
+    ls.add_argument("--json", action="store_true")
     e = sub.add_parser("export")
     e.add_argument("--session-id", required=True); e.add_argument("-o", "--output")
     e.add_argument("--claude-home", default=os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude")
@@ -587,7 +632,8 @@ def main():
     m.add_argument("--overwrite-destination-work", action="store_true"); m.add_argument("--cli-version")
     p = sub.add_parser("origin-proof"); p.add_argument("file"); p.add_argument("--claude-home"); p.add_argument("-o", "--output")
     a = ap.parse_args()
-    {"export": export, "inspect": inspect, "import": do_import, "origin-proof": origin_proof}[a.cmd](a)
+    {"list": list_sessions, "export": export, "inspect": inspect, "import": do_import,
+     "origin-proof": origin_proof}[a.cmd](a)
 
 
 if __name__ == "__main__":

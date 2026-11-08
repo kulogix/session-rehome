@@ -1,23 +1,42 @@
 ---
 name: claude-desktop-rehome
 description: >-
-  List Claude Desktop Code sessions by account and move them between accounts, for ANY Desktop profile (the plain
-  `claude-desktop` window or any `--user-data-dir`, e.g. ~/.claude-instances/acct-e or a path anywhere) and ANY
-  number of accounts. Use when "I logged out of X and into Y and my sessions are gone", "switch this window from my
-  personal to my work account", "Desktop doesn't show my old sessions", "move these sessions to account Z", "which sessions
-  belong to which account", "which window is logged in as which email", "is this instance signed out". Also converts terminal (CLI) Claude Code
-  sessions into Desktop sessions and back ("show my CLI sessions in Desktop", "continue this Desktop session in
-  the terminal") without Desktop's transcript-rewriting import. Discovers
-  profiles, account id -> email, signed-in state and login expiry; moves any or all sessions (Code, optionally
-  Cowork) with their task suggestions, scheduled tasks and queued background work; archives first, undoes exactly,
-  verifies from Desktop's own log. Linux verified; macOS and Windows experimental. NOT for moving sessions to
-  another machine (a transcript-transplant job), and it never signs in or out for the user.
+  Moves Claude Desktop Code sessions on THIS machine without losing them: after a sign-in change ("I logged out
+  of X and into Y and my sessions are gone", "Desktop doesn't show my old sessions"), between accounts ("move
+  these sessions to my work account"), between Desktop windows / user-data-dirs ("move this session to my other
+  Desktop window"), and between the terminal CLI and Desktop ("show my CLI sessions in Desktop", "continue this
+  Desktop session in the terminal"). Also answers "which window is signed in as whom", "which sessions belong to
+  which account", "is this window signed out". Any number of accounts, any --user-data-dir. Dry runs, format
+  validation, an archive before every change, exact undo, verification from Desktop's own log. Never signs in or
+  out, never edits a conversation. To move a session to ANOTHER machine or OS, use claude-session-transporter.
+license: MIT
+compatibility: >-
+  Python 3.9+, standard library only. Claude Desktop on Linux (verified), macOS (partly verified), Windows
+  (experimental). See tested.json.
+metadata:
+  homepage: https://github.com/kulogix/claude-session-rehome
 ---
 
 # claude-desktop-rehome
 
-The script is `~/.claude/skills/claude-desktop-rehome/scripts/ccd-rehome`, Python 3.9+, stdlib only. Below, `R`
-stands for that path.
+**Which skill?** This one works on **one machine**. The companion skill **claude-session-transporter** moves a
+session to **another machine or operating system**.
+
+| The user wants to… | Use |
+|---|---|
+| get sessions back after signing in to a different account, or move them to another account | **this skill** |
+| move a session to another Desktop window (another `--user-data-dir`) on this machine | **this skill** (`move --to-profile`) |
+| show a terminal (CLI) session in Desktop, or continue a Desktop session in the terminal | **this skill** (`register`, `resume-cli`) |
+| move a session to another computer, another OS, or restore it from an archive | **claude-session-transporter** |
+
+**How to run the tool.** Every command is
+
+    python3 "${CLAUDE_SKILL_DIR}/scripts/ccd-rehome" <command> ...
+
+On Windows, use `py -3` (or `python`) instead of `python3`. In the tables below, **`R` stands for that whole
+prefix**: type it in full each time, because shell variables do not survive between your commands. If you see the
+text `${CLAUDE_SKILL_DIR}` literally, it means the folder that contains this SKILL.md. The tool needs Python 3.9+
+and nothing else.
 
 ## Start here
 
@@ -26,18 +45,19 @@ stands for that path.
 | "my sessions are gone after I switched accounts" | `R status`, then the `fix:` command it prints, then `R launch P` and `R verify P` |
 | "which window is signed in as whom" | `R profiles` |
 | "what sessions does this window have, under which accounts" | `R sessions P` |
-| "move these sessions to account X" | `R sessions P` (get ids), then `R move P --to X --only ID ... --dry-run`, then without `--dry-run` |
-| "fix all my windows" | `R rehome --all` |
-| "undo that" | `R rollback P ARCHIVE` (the name the move printed) |
-| put a session record into a profile on ANOTHER machine (with claude-session-transporter) | `R export-record P --only ID --out r.json` here; `R adopt P2 --record r.json --cwd NEW_DIR` there (the transporter's bundle does both for you) |
-| "move this session to my other Desktop window" (another user-data-dir, same machine) | `R move P --only ID --to-profile P2 [--to EMAIL] --dry-run`, then without `--dry-run` (both quit) |
+| "move these sessions to account X" | `R sessions P` (get ids), then `R move P --to X --only ID --dry-run`, then the same without `--dry-run` |
+| "fix all my windows" | `R rehome --all --dry-run`, then `R rehome --all` |
+| "undo that" | `R rollback P ARCHIVE` (the archive name the move printed; `R status P` lists them) |
+| "move this session to my other Desktop window" (another user-data-dir, same machine) | `R move P --only ID --to-profile P2 --dry-run`, then without `--dry-run` (both windows quit) |
 | "show my terminal (CLI) sessions in Desktop" | `R cli-sessions`, then `R register P --cli-session-id ID` (never Desktop's "Recover CLI sessions") |
 | "continue this Desktop session in the terminal" | `R resume-cli P --only ID` (prints the checked command); `R unregister P --only ID` to drop the Desktop record too |
-| first use on a machine | `R doctor`, then `python3 -I <skill>/scripts/selftest.py` |
-| it worked on a new Desktop version / OS | `R report <what you ran>`, then offer the user to submit it (CONTRIBUTING.md) |
+| put a session record into a profile on ANOTHER machine | use claude-session-transporter's bundle: it runs `R export-record` here and `R adopt` there for you |
+| first use on a machine | `R doctor`, then `python3 -I "${CLAUDE_SKILL_DIR}/scripts/selftest.py"` |
+| it worked on a new Desktop version or OS | `R report <what you ran>`, then offer the user to submit it (see "Maintaining this skill") |
 
-`P` is a profile: `default` (the plain window), a folder name under `~/.claude-instances` (`acct-e`), or any path
-to a user-data-dir.
+`P` is a profile: `default` (the plain Desktop window), a folder name under `~/.claude-instances` (`acct-e`), or
+any path to a user-data-dir. `ID` is a session id prefix from `R sessions P`. `X` is an email, an account uuid, or
+a unique uuid prefix.
 
 ## Rules for the agent
 
@@ -59,7 +79,7 @@ to a user-data-dir.
 5. **Exit codes:** `0` means done, nothing to do, or verify OK. `1` means refused, failed, or MISMATCH, and stderr
    says why. `2` means a bad command line. A refusal is a stop, not a puzzle to work around.
 6. **Blockers are instructions for the human** (see Troubleshooting). Relay them; don't fake a sign-in, edit
-   `config.json`, or create folders by hand.
+   `config.json`, or create folders by hand. Signing in and out is always the user's job.
 7. **After every real move,** `launch` and wait about 20 s, then `verify`. Report:
    - titles moved, from which email to which;
    - the archive name and undo command;
@@ -69,7 +89,7 @@ to a user-data-dir.
 8. **If another tool on the machine also moves Desktop session records** (for example a switcher between Anthropic
    and a local inference gateway), use this one for account changes and that one for gateway changes.
 9. **If the tool misbehaves or `doctor` reports DRIFT, fix the skill itself.** See "Maintaining this skill"
-   below.
+   below. Never work around it by hand.
 10. **When it worked on an untested combination** (NOTE above), run `R report <what ran>` and offer the user to
     submit it. The entry contains nothing identifying.
 
@@ -87,6 +107,7 @@ folder alone decides ownership.
 R profiles | status [P ...] | sessions P | accounts       [--json]   read-only reports
 R rehome P ... | --all              [--include-cowork] [--dry-run]   everything stranded -> signed-in account
 R move P [--to ACCT] [--to-org ORG] [--from ACCT ...] [--only ID ...] [--include-cowork] [--dry-run]
+R move P --only ID ... --to-profile P2 [--to ACCT] [--dry-run]      to another Desktop window on this machine
 R rollback P ARCHIVE [--dry-run]                                     exact undo
 R export-record P --only ID [--out FILE]                              one record as a portable ccd-record/1
 R adopt P --record FILE [--to ACCT] [--to-org ORG] [--cwd DIR] [--cli-session-id ID] [--title T] [--dry-run]
@@ -151,6 +172,7 @@ converting never edits a transcript:
   conversation is not open in any process (two writers fork the history). The session stays listed in
   Desktop. **`unregister`** removes the Desktop record (archived, undone by `rollback`) when it should be
   CLI-only.
+
 **What carries over, and what does not**
 
 | | Desktop → terminal (`resume-cli`, `unregister`) | terminal → Desktop (`register`) |
@@ -173,8 +195,8 @@ converting never edits a transcript:
   has two children (no fork), and the thinking signatures were accepted on both sides.
 - **Do not start the terminal leg from inside a Desktop session.** A `claude` launched from a shell inside
   Desktop inherits its environment: it was stamped `claude-desktop` and ran as that session's child.
-  `resume-cli` warns and prints an `env -i` form. The
-  Desktop-made Fibonacci transcript was loaded by plain CLIs on macOS (2.1.119) and Linux arm64 (2.1.121).
+  `resume-cli` warns and prints an `env -i` form. The Desktop-made test transcript was loaded by plain CLIs on
+  macOS (2.1.119) and Linux arm64 (2.1.121).
 - **The `mangle()` copy** in the script mirrors claude-session-transporter's canonical `mangle.py`; the self-test
   cross-checks them whenever both are installed.
 
@@ -211,9 +233,11 @@ claude-session-transporter moves *conversations* between machines; this tool own
 
 ## Platform support
 
+`doctor` prints how far this OS is verified, read from `tested.json`.
+
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| Status | **verified** (x86_64 and aarch64; see `tested.json`) | partly verified: self-test and read-only commands on a real Mac (Desktop 4.23118.0); no live move yet | experimental: CI self-test only |
+| Status | **verified** (x86_64 and aarch64) | partly verified: self-test and read-only commands on a real Mac (Desktop 4.23118.0); no live move yet | experimental: CI self-test only |
 | Default profile | `~/.config/Claude` | `~/Library/Application Support/Claude` | `%APPDATA%\Claude` |
 | Logs | `<profile>/logs` | `~/Library/Logs/Claude` (confirmed), shared by all instances; the tool uses only path-bearing lines there | `<profile>\logs` |
 | Running check | `/proc` + `SingletonLock` | one `ps` + `SingletonLock` | one PowerShell CIM query + `lockfile` |
@@ -245,12 +269,12 @@ first move with `--dry-run`, then `verify`.
 
 ## Maintaining this skill (agents: this is part of the job)
 
-This folder is the **one** copy of the skill: a git checkout of its canonical repo. Desktop, macOS and Windows will
-change under it. Whoever uses it and finds it wrong (usually an agent) brings it up to date **here**.
+There is **one** copy of this skill: the project at https://github.com/kulogix/claude-session-rehome. A local
+install is normally a link to a clone of it (`install.py`), so the folder you are reading may be inside that clone.
+Desktop, macOS and Windows will change under it. Whoever finds it wrong (usually an agent) fixes it **there**.
 
 **Never:**
-- copy the script somewhere else to patch it;
-- write a "v2" or a one-off variant script;
+- copy the script somewhere else to patch it, or write a "v2" or a one-off variant;
 - hand-move files around the tool because "it doesn't handle this case";
 - hard-code a user's accounts, paths or hosts. Those belong in the user's own notes, or in `CCD_REHOME_*`
   variables.
@@ -264,46 +288,44 @@ A fork fixes one machine once and leaves every other copy broken. A workaround h
 - it fails on a new OS or Desktop version.
 
 **How:**
-1. **Reproduce and measure.** Find the real evidence: a record's fields, the log lines, the folder layout. Read the
+1. **Find the checkout.** `git -C "${CLAUDE_SKILL_DIR}" rev-parse --show-toplevel` names it. If the skill is not
+   inside a git checkout (a copy or plugin install), tell the user, and suggest cloning the project and
+   installing from it with `python3 install.py`, so the fix is not stranded in a copy.
+2. **Reproduce and measure.** Find the real evidence: a record's fields, the log lines, the folder layout. Read the
    matching row of the contract in `references/mechanics.md` §0, and decide what changed. Not knowing what a new
    field is counts as a finding to investigate, not a reason to guess.
-2. **Write the test first.** Add a synthetic fixture to `scripts/selftest.py` that reproduces the new behaviour, and
+3. **Write the test first.** Add a synthetic fixture to `scripts/selftest.py` that reproduces the new behaviour, and
    watch it fail. Never put real user data in fixtures.
-3. **Fix `scripts/ccd-rehome`.** Keep it to one file, stdlib only, Python 3.8+, with no new dependencies. Classify
+4. **Fix `scripts/ccd-rehome`.** Keep it to one file, stdlib only, Python 3.9+, with no new dependencies. Classify
    new record fields in `KNOWN_KEYS`, `ACCOUNT_BOUND` or `TRANSIENT`, and new per-account entries in
    `KNOWN_ENTRIES` plus the logic in `move()`.
-4. **Prove the test bites.** Run `python3 -I scripts/selftest.py` until it passes. Then break your fix on purpose
-   and confirm the test fails.
-5. **Update the docs in the same change:**
-   - `references/mechanics.md`: the evidence, plus the contract row;
-   - this file, if behaviour or rules changed;
-   - `README.md`, if a human-facing step changed;
-   - `CHANGELOG.md`, with the date and Desktop version.
-6. **Commit in this folder** with a message naming the Desktop version and OS. Then **offer** the user to share
-   it upstream (https://github.com/kulogix/claude-desktop-rehome) as a pull request, following CONTRIBUTING.md.
-   Push or open the PR only with their go-ahead, and never include their emails, ids or paths. If the folder isn't
-   a git checkout, tell the user, and suggest replacing it with a clone so the fix isn't stranded.
-   - Also add a `tested.json` entry (`R report …`) once the fix has run for real.
-7. **Prefer refusing over guessing.** If the right fix is unclear, make the tool refuse that case with a clear
+5. **Prove the test bites.** Run `python3 -I scripts/selftest.py` until it passes. Then break your fix on purpose
+   and confirm the test fails. Then run the whole project's tests: `python3 tests/run_all.py` in the checkout.
+6. **Update the docs in the same change:** `references/mechanics.md` (the evidence and the contract row); this
+   file, if behaviour or rules changed; the project's `docs/` pages, if a human-facing step changed; and the
+   project's `CHANGELOG.md`, with the date and Desktop version.
+7. **Commit** with a message naming the Desktop version and OS. Then **offer** the user to share it upstream as a
+   pull request (the project's CONTRIBUTING.md:
+   https://github.com/kulogix/claude-session-rehome/blob/main/CONTRIBUTING.md). Push or open the PR only with their
+   go-ahead, and never include their emails, ids or paths. Add a `tested.json` entry (`R report …`) once the fix
+   has run for real.
+8. **Prefer refusing over guessing.** If the right fix is unclear, make the tool refuse that case with a clear
    message and record the open question in `mechanics.md`. A loud refusal is a correct intermediate state; a quiet
    wrong move is not.
 
 ## Files and settings
 
-- `scripts/ccd-rehome`: the tool.
-- `tested.json`: tool, Desktop and OS combinations that passed (`doctor` checks this machine against it; `report`
-  makes a new entry).
-- `CONTRIBUTING.md`: issues, pull requests, CI. `.github/`: issue and PR templates; CI runs the self-test on
-  Linux, macOS and Windows.
-- `scripts/selftest.py`: 112 checks on synthetic profiles, including simulated macOS and Windows layouts, about 40
-  s. Mutation-tested. Run it after any edit; `SELFTEST_VERBOSE=1` shows the tool's output on failures.
-- `README.md`: human runbook, with install steps for a new machine.
-- `references/mechanics.md`: storage layout, log lines, evidence for every rule.
+- `scripts/ccd-rehome`: the tool (one file, Python 3.9+, stdlib only).
+- `scripts/selftest.py`: the self-test on synthetic profiles, including simulated macOS and Windows layouts
+  (about a minute; mutation-tested). Run it after any edit; `SELFTEST_VERBOSE=1` shows the tool's output on
+  failures.
+- `tested.json`: the tool, Desktop and OS combinations that passed. `doctor` reads it; `report` makes a new entry.
+- `references/mechanics.md`: storage layout, log lines, and the evidence for every rule.
+- Human guides (installing Desktop, running several windows, switching accounts, moving sessions,
+  troubleshooting): the project's `docs/` folder, https://github.com/kulogix/claude-session-rehome/tree/main/docs.
 - **Environment:**
   - `CCD_REHOME_PROFILES`: extra profile paths.
   - `CCD_REHOME_DESKTOP`: the app binary for `launch`.
   - `CCD_REHOME_STATE`: the state and archive dir.
   - `CCD_REHOME_FALLBACK_MODEL` / `CCD_REHOME_LOCAL_MODEL_RE`: the model rewrite.
   - `CCD_REHOME_HOME`, `CCD_REHOME_SANDBOX`, `CCD_REHOME_PLATFORM`: tests only.
-- **Related:** moving sessions to *another machine* is a different job (transcripts and paths change); if a
-  cross-machine transplant skill such as `claude-session-transporter` is installed, use that.
