@@ -513,6 +513,11 @@ def find_rehome():
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):   # a pipe on Windows defaults to the ANSI code page (cp1252): write UTF-8
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     sys.argv[1:] = dashsafe(sys.argv[1:], ("--origin-key",))
     ap = argparse.ArgumentParser(
         description="install a checkpointed Claude Code session at a new location")

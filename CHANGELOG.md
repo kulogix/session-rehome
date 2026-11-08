@@ -4,6 +4,16 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.9.2 — 2026-11-07
+
+- **`st-bundle.py` and `st-transplant.py` write UTF-8 on every OS.** On Windows, output to a pipe defaulted to the
+  ANSI code page (cp1252), where characters these tools print (such as `→`) cannot be encoded, and the output
+  arrived garbled at whatever read it. Found by the Windows CI run. The transporter self-test writes UTF-8 too
+  (`python -I` ignores `PYTHONIOENCODING`), so its report of a failure can no longer crash.
+
+**Tested:** `python3 tests/run_all.py` on Linux: rehome 112/112, transporter 39/39, repository tests pass. Windows
+results come from CI.
+
 ## 0.9.1 — 2026-11-07
 
 Fixes from the first CI run on Windows (Windows remains experimental).

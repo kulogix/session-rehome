@@ -9,6 +9,11 @@ $ST_REHOME) for the Desktop-record checks.      python3 -I selftest.py      exit
 import datetime, glob, hashlib, json, os, shutil, sqlite3, subprocess, sys, tempfile, zipfile
 
 sys.dont_write_bytecode = True
+for _s in (sys.stdout, sys.stderr):          # -I ignores PYTHONIOENCODING; a Windows pipe would be cp1252
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from mangle import mangle  # noqa: E402
