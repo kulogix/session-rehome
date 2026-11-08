@@ -51,18 +51,20 @@ class Installer(unittest.TestCase):
     def test_foreign_folder_is_refused_then_backed_up_never_deleted(self):
         foreign = os.path.join(self.target, "claude-desktop-rehome")
         os.makedirs(foreign)
-        open(os.path.join(foreign, "my-notes.txt"), "w").write("precious")
+        with open(os.path.join(foreign, "my-notes.txt"), "w") as f:
+            f.write("precious")
         rc, out = run("--copy", "--target", self.target)
         self.assertNotEqual(rc, 0)
         self.assertIn("REFUSED", out)
-        self.assertEqual(open(os.path.join(foreign, "my-notes.txt")).read(), "precious")
+        with open(os.path.join(foreign, "my-notes.txt")) as f:
+            self.assertEqual(f.read(), "precious")
         rc, out = run("--copy", "--force", "--target", self.target)
         self.assertEqual(rc, 0, out)
         backups = os.listdir(os.path.join(self.tmp, ".claude", "skill-backups"))
         kept = [b for b in backups if b.startswith("claude-desktop-rehome-")]
         self.assertEqual(len(kept), 1)
-        self.assertEqual(open(os.path.join(self.tmp, ".claude", "skill-backups", kept[0], "my-notes.txt")).read(),
-                         "precious")
+        with open(os.path.join(self.tmp, ".claude", "skill-backups", kept[0], "my-notes.txt")) as f:
+            self.assertEqual(f.read(), "precious")
 
     def test_legacy_install_is_flagged(self):
         os.makedirs(os.path.join(self.target, "session-transporter"))
@@ -87,6 +89,45 @@ class Installer(unittest.TestCase):
             r = subprocess.run([os.path.join(self.bin, name), "--version"], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertRegex(r.stdout + r.stderr, r"\d+\.\d+\.\d+")
+        r = subprocess.run([os.path.join(self.bin, "st-verify"), "--help"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--origin-proof", r.stdout + r.stderr)
+
+    def test_foreign_launcher_is_never_overwritten(self):
+        os.makedirs(self.bin)
+        with open(os.path.join(self.bin, "st-bundle" + (".cmd" if sys.platform.startswith("win") else "")), "w") as f:
+            f.write("my own script\n")
+        rc, out = run("--copy", "--target", self.target, "--bin", self.bin)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("REFUSED", out)
+        with open(os.path.join(self.bin, "st-bundle" + (".cmd" if sys.platform.startswith("win") else ""))) as f:
+            self.assertEqual(f.read(), "my own script\n")
+
+    def test_edited_copy_is_backed_up_not_deleted(self):
+        rc, out = run("--copy", "--target", self.target)
+        self.assertEqual(rc, 0, out)
+        note = os.path.join(self.target, "claude-desktop-rehome", "my-fix.txt")
+        with open(note, "w") as f:
+            f.write("an edit made after installing")
+        rc, out = run("--status", "--target", self.target)
+        self.assertIn("ours-copy-edited", out)
+        rc, out = run("--uninstall", "--target", self.target)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "claude-desktop-rehome")))
+        kept = [b for b in os.listdir(os.path.join(self.tmp, ".claude", "skill-backups"))
+                if b.startswith("claude-desktop-rehome-")]
+        self.assertEqual(len(kept), 1, "the edited copy must survive in skill-backups")
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, ".claude", "skill-backups", kept[0], "my-fix.txt")))
+
+    @unittest.skipIf(sys.platform.startswith("win"), "symlinks need special rights on Windows")
+    def test_broken_link_is_replaced(self):
+        os.makedirs(self.target)
+        os.symlink(os.path.join(self.tmp, "gone", "claude-desktop-rehome"),
+                   os.path.join(self.target, "claude-desktop-rehome"))
+        rc, out = run("--link", "--target", self.target)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("broken link", out)
+        self.assertTrue(os.path.isfile(os.path.join(self.target, "claude-desktop-rehome", "SKILL.md")))
 
     def test_uninstall_removes_only_ours(self):
         rc, out = run("--copy", "--target", self.target, "--bin", self.bin)

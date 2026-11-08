@@ -90,7 +90,7 @@ class DocsMatchTools(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_bundle_commands_and_flags(self):
-        rx = re.compile(r"st-bundle\.py\"?(?=\s)")
+        rx = re.compile(r"(?<![\w-])st-bundle(?:\.py)?\"?(?=\s)")   # the script, or the install.py launcher
         bad = []
         for doc, lines in self.docs.items():
             for _, seg in segments(lines, rx):
@@ -98,7 +98,7 @@ class DocsMatchTools(unittest.TestCase):
                 if not words:
                     continue
                 sub = words[0]
-                if sub.startswith("-"):
+                if sub.startswith("-") or re.match(r"^\d", sub):      # a flag, or a version ("st-bundle 0.9.0")
                     continue
                 if sub not in self.bundle_help:
                     bad.append(f"{doc}: st-bundle.py {sub} (no such command)")
@@ -111,6 +111,8 @@ class DocsMatchTools(unittest.TestCase):
     def test_transporter_script_flags(self):
         """Every --flag shown after st-transplant.py or an st-*.sh script is in that script's --help."""
         tools = [("st-transplant.py", self.transplant_help)] + [(t, h) for t, h in self.shell_help.items() if h]
+        if self.shell_help.get("st-verify.sh"):
+            tools.append(("st-verify", self.shell_help["st-verify.sh"]))       # the install.py launcher
         bad = []
         for doc, lines in self.docs.items():
             for name, help_text in tools:

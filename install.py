@@ -6,7 +6,7 @@
     python3 install.py --status        what is installed, from where, and which versions
     python3 install.py --link | --copy choose the mode (a link keeps ONE copy: `git pull` here updates it)
     python3 install.py --bin ~/.local/bin
-                                       also put `ccd-rehome` and `st-bundle` launchers in that folder
+                                       also put `ccd-rehome`, `st-bundle` and `st-verify` launchers there
     python3 install.py --uninstall     remove what this installer installed, and nothing else
     python3 install.py --dry-run ...   print what would happen; change nothing
 
@@ -34,7 +34,10 @@ SKILLS = ("claude-desktop-rehome", "claude-session-transporter")
 MAIN_SCRIPT = {"claude-desktop-rehome": "ccd-rehome", "claude-session-transporter": "st-bundle.py"}
 LEGACY = {"session-transporter": "claude-session-transporter"}     # older folder names: a second copy would load
 MARKER = ".installed-by-claude-session-rehome.json"
-LAUNCHERS = {"ccd-rehome": "claude-desktop-rehome", "st-bundle": "claude-session-transporter"}
+# launcher name -> (skill, script, interpreter). st-verify needs bash, so it has no Windows launcher.
+LAUNCHERS = {"ccd-rehome": ("claude-desktop-rehome", "ccd-rehome", "python"),
+             "st-bundle": ("claude-session-transporter", "st-bundle.py", "python"),
+             "st-verify": ("claude-session-transporter", "st-verify.sh", "bash")}
 LAUNCHER_TAG = "installed by claude-session-rehome install.py"
 WIN = sys.platform.startswith("win")
 DRY = False
@@ -207,7 +210,9 @@ def launcher_path(bindir, name):
     return os.path.join(bindir, name + (".cmd" if WIN else ""))
 
 
-def launcher_body(script):
+def launcher_body(script, interpreter):
+    if interpreter == "bash":
+        return f'#!/bin/sh\n# {LAUNCHER_TAG}\nexec bash "{script}" "$@"\n'
     if WIN:
         return ("@echo off\r\n"
                 f"rem {LAUNCHER_TAG}\r\n"
@@ -232,9 +237,12 @@ def write_launchers(bindir, target):
     ok = True
     if not DRY:
         os.makedirs(bindir, exist_ok=True)
-    for name, skill in LAUNCHERS.items():
-        script = os.path.join(target, skill, "scripts", MAIN_SCRIPT[skill])
+    for name, (skill, script_name, interpreter) in LAUNCHERS.items():
+        script = os.path.join(target, skill, "scripts", script_name)
         lp = launcher_path(bindir, name)
+        if WIN and interpreter == "bash":
+            say(f"  launcher {name}: skipped on Windows (it needs bash: run it under WSL or Git-Bash)")
+            continue
         if os.path.lexists(lp) and not ours(lp):
             say(f"  launcher {lp}: REFUSED, a file with that name exists and is not ours")
             ok = False
@@ -242,7 +250,7 @@ def write_launchers(bindir, target):
         say(f"  launcher {lp} -> {script}")
         if not DRY:
             with open(lp, "w", encoding="utf-8", newline="") as f:
-                f.write(launcher_body(script))
+                f.write(launcher_body(script, interpreter))
             if not WIN:
                 os.chmod(lp, 0o755)
     on_path = [os.path.realpath(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
@@ -310,7 +318,7 @@ def main():
     ap.add_argument("--target", default=os.path.join(os.path.expanduser("~"), ".claude", "skills"),
                     help="skills folder (default: ~/.claude/skills)")
     ap.add_argument("--skill", action="append", choices=SKILLS, help="install only this skill (repeatable)")
-    ap.add_argument("--bin", metavar="DIR", help="also write ccd-rehome / st-bundle launchers into DIR")
+    ap.add_argument("--bin", metavar="DIR", help="also write ccd-rehome / st-bundle / st-verify launchers into DIR")
     ap.add_argument("--force", action="store_true", help="move a folder this installer did not create to a backup")
     ap.add_argument("--uninstall", action="store_true", help="remove what this installer installed")
     ap.add_argument("--status", action="store_true", help="show what is installed and the versions")

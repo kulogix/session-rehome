@@ -1,0 +1,48 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    # macOS and Windows are reported but do not fail the workflow until they are confirmed on real machines
+    # (a tested.json entry). Linux must pass.
+    continue-on-error: ${{ !startsWith(matrix.os, 'ubuntu') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+        exclude:
+          - os: ubuntu-latest
+            python: "3.9"
+        include:
+          # the newest Ubuntu image no longer ships Python 3.9; test the floor on the previous LTS image
+          - os: ubuntu-24.04
+            python: "3.9"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: both self-tests and the repository tests (synthetic data in temporary folders only)
+        env:
+          SELFTEST_VERBOSE: "1"
+          PYTHONIOENCODING: utf-8
+        run: python -I tests/run_all.py
+
+  plugin:
+    name: plugin manifests (claude plugin validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: install Claude Code (the validator only; no sign-in)
+        run: npm install -g @anthropic-ai/claude-code
+      - name: validate the marketplace and the plugin
+        run: claude plugin validate .
