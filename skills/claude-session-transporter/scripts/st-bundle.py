@@ -25,7 +25,7 @@ Never edits a transcript. Never reads or packs credentials, ~/.claude.json, hist
 import argparse, datetime, glob, hashlib, io, json, os, platform, re, shutil, subprocess, sys, tempfile, unicodedata
 import zipfile
 
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 FORMAT = "claude-session-bundle/1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -528,9 +528,9 @@ def do_import(a):
                     f"taken_at={man['created_utc']}\nbundle={os.path.abspath(a.file)}\n")
         os.makedirs(os.path.join(staging, "manifest"), exist_ok=True)
         t = man["transcript"]
-        with open(os.path.join(staging, "manifest", "transcript-sha256.txt"), "w") as f:
+        with open(os.path.join(staging, "manifest", "transcript-sha256.txt"), "w", encoding="utf-8") as f:
             f.write(f"{t['sha256']}  claude/projects/{key}/{sid}.jsonl\n")
-        with open(os.path.join(staging, "manifest", "transcript-prefix-len.txt"), "w") as f:
+        with open(os.path.join(staging, "manifest", "transcript-prefix-len.txt"), "w", encoding="utf-8") as f:
             f.write(f"{t['prefix_len']}\n")
         with open(os.path.join(staging, "manifest", "local-project.tsv"), "w", encoding="utf-8") as f:
             f.write("# rel\tsize\tsha256\n")             # what st-verify.sh checks destination coverage against
@@ -539,7 +539,7 @@ def do_import(a):
                     f.write(f"{m['path'][len('payload/project/'):]}\t{m['size']}\t{m['sha256']}\n")
         with open(os.path.join(staging, "manifest", "bundle-manifest.json"), "w", encoding="utf-8") as f:
             json.dump(man, f, indent=2, ensure_ascii=False)
-        open(os.path.join(staging, "COMPLETE"), "w").close()    # verified above, member by member
+        open(os.path.join(staging, "COMPLETE"), "w", encoding="utf-8").close()    # verified above, member by member
     cmd = [sys.executable, "-I", os.path.join(HERE, "st-transplant.py"), "--apply" if a.apply else "--plan",
            "--checkpoint", staging, "--session-id", sid, f"--origin-key={key}",
            "--origin-root", o.get("project_root") or "/", "--origin-claude", o.get("claude_home") or "",

@@ -560,10 +560,10 @@ try:
           "register after unregister restores the session's Desktop settings from the archive (nothing lost)")
     fake = os.path.join(home, "fakebin"); os.makedirs(fake)
     if sys.platform.startswith("win"):                  # Windows finds commands by extension (PATHEXT)
-        with open(os.path.join(fake, "claude.cmd"), "w") as f:
+        with open(os.path.join(fake, "claude.cmd"), "w", encoding="utf-8") as f:
             f.write("@echo 2.1.100 (Claude Code)\r\n")
     else:
-        with open(os.path.join(fake, "claude"), "w") as f:
+        with open(os.path.join(fake, "claude"), "w", encoding="utf-8") as f:
             f.write("#!/bin/sh\necho '2.1.100 (Claude Code)'\n")
         os.chmod(os.path.join(fake, "claude"), 0o755)
     open(tx, "a", encoding="utf-8").write(json.dumps({"type": "assistant", "uuid": "a2", "version": "2.1.295",

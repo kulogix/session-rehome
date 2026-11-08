@@ -102,5 +102,29 @@ class Skills(unittest.TestCase):
                         bad.append(f"{n}/scripts/{f}: {ref}" + ("" if inside else " (outside the skill)"))
         self.assertEqual(bad, [])
 
+    def test_text_files_are_opened_as_utf8(self):
+        """Every text-mode open() in a Python script names its encoding. Without one, Windows uses its ANSI code page
+        (cp1252): a CLAUDE.md written that way is garbled when Claude Code reads it as UTF-8."""
+        import ast
+        bad = []
+        for n in NAMES:
+            sd = os.path.join(SKILLS, n, "scripts")
+            for f in sorted(os.listdir(sd)):
+                p = os.path.join(sd, f)
+                src = read_text(p) or ""
+                if not (f.endswith(".py") or src.startswith("#!/usr/bin/env python3")):
+                    continue
+                for node in ast.walk(ast.parse(src)):
+                    if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "open"):
+                        continue
+                    mode = node.args[1] if len(node.args) > 1 else next(
+                        (k.value for k in node.keywords if k.arg == "mode"), None)
+                    m = mode.value if isinstance(mode, ast.Constant) and isinstance(mode.value, str) else "r"
+                    if "b" in m or not isinstance(mode, (ast.Constant, type(None))):
+                        continue
+                    if not any(k.arg == "encoding" for k in node.keywords):
+                        bad.append(f"{n}/scripts/{f}:{node.lineno} open(..., {m!r}) has no encoding")
+        self.assertEqual(bad, [])
+
 if __name__ == "__main__":
     unittest.main()

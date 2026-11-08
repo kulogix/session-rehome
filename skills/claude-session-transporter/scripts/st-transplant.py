@@ -295,7 +295,7 @@ def in_record_session_id(path):
     """The `relocated` record must carry the IN-RECORD session id, not the filename uuid:
     two of its three consumers key off it."""
     try:
-        with open(path, "r", errors="replace") as f:
+        with open(path, "r", errors="replace", encoding="utf-8") as f:
             for _ in range(200):
                 line = f.readline()
                 if not line:
@@ -371,7 +371,7 @@ def instance_running(user_data_dir=None):
 
 def atomic_write(path, text, mode=0o600):
     tmp = path + ".st-tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
     os.chmod(tmp, mode)
     os.replace(tmp, path)
@@ -605,7 +605,7 @@ def main():
     prov = {}
     pfile = os.path.join(ckpt, "PROVENANCE")
     if os.path.isfile(pfile):
-        for line in open(pfile):
+        for line in open(pfile, encoding="utf-8"):
             if "=" in line:
                 k, v = line.rstrip("\n").split("=", 1)
                 prov[k] = v
@@ -648,7 +648,7 @@ def main():
     dest_desc = a.dest_desc or ("%s : %s" % (platform.node(), dest_root))
     extra = ""
     if a.notice_extra_file:
-        extra = open(a.notice_extra_file).read()
+        extra = open(a.notice_extra_file, encoding="utf-8").read()
 
     print("=" * 74)
     print("ST-TRANSPLANT   %s" % ("[PLAN — nothing will be written]" if a.plan else "[APPLY]"))
@@ -948,7 +948,7 @@ def main():
         if not a.cli_version:
             R.warn_("no --cli-version given; the appended record is stamped version 0.0.0. "
                     "st-preflight.sh prints the destination CLI's real version.")
-        with open(dest_tx, "a") as f:
+        with open(dest_tx, "a", encoding="utf-8") as f:
             # JSON.stringify-equivalent: compact separators, non-ASCII kept verbatim
             f.write(json.dumps(rec, separators=(",", ":"), ensure_ascii=False) + "\n")
         R.ok("notice appended as one `user` record")
@@ -961,7 +961,7 @@ def main():
             if in_sid != dest_sid:
                 R.info("in-record sessionId (%s) differs from the filename (%s); the "
                        "`relocated` record must carry the IN-RECORD one" % (in_sid, dest_sid))
-            with open(dest_tx, "a") as f:
+            with open(dest_tx, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"type": "relocated", "sessionId": in_sid,
                                     "relocatedCwd": dest_root},
                                    separators=(",", ":")) + "\n")
@@ -1078,7 +1078,7 @@ def main():
     cmd_path = os.path.join(dest_root, "CLAUDE.md")
     mb, me = mark_begin(dest_sid), mark_end(dest_sid)
     if os.path.isfile(cmd_path):
-        cur = open(cmd_path).read()
+        cur = open(cmd_path, encoding="utf-8").read()
         found = next(((b_, e_) for b_, e_ in [(mb, me)] + legacy_marks(dest_sid) if b_ in cur and e_ in cur), None)
         if found:
             new = re.sub(re.escape(found[0]) + r".*?" + re.escape(found[1]), lambda _m: block, cur, flags=re.S)
@@ -1147,13 +1147,13 @@ def main():
             R.info("settings.json: nothing merged (--no-settings)")
     elif os.path.isfile(src_settings):
         try:
-            osettings = json.load(open(src_settings))
+            osettings = json.load(open(src_settings, encoding="utf-8"))
         except Exception as e:                                     # noqa: BLE001
             osettings = {}
             R.warn_("origin settings.json unreadable: %s" % e)
         dpath = os.path.join(claude_home, "settings.json")
         try:
-            dsettings = json.load(open(dpath)) if os.path.isfile(dpath) else {}
+            dsettings = json.load(open(dpath, encoding="utf-8")) if os.path.isfile(dpath) else {}
         except Exception:                                          # noqa: BLE001
             dsettings = {}
             R.warn_("destination settings.json unreadable — not overwriting it")
@@ -1249,7 +1249,7 @@ def main():
             if not (fn.startswith("local_") and fn.endswith(".json")):
                 continue
             try:
-                d = json.load(open(os.path.join(sess_dir, fn)))
+                d = json.load(open(os.path.join(sess_dir, fn), encoding="utf-8"))
             except Exception:                                      # noqa: BLE001
                 continue
             if d.get("cliSessionId") == dest_sid:
@@ -1337,7 +1337,7 @@ def main():
             R.warn_("no %s — the app will show its trust dialog on first open" % cj)
         else:
             try:
-                d = json.load(open(cj))
+                d = json.load(open(cj, encoding="utf-8"))
                 projects = d.setdefault("projects", {})
                 entry = projects.setdefault(dest_root, {})
                 if entry.get("hasTrustDialogAccepted") is True:

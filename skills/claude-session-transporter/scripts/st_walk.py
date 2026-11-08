@@ -106,7 +106,7 @@ def load_patterns(items, files):
         if it and not it.startswith("#"):
             pats.append(it)
     for fn in files or []:
-        with open(fn, "r") as fh:
+        with open(fn, "r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.split("#", 1)[0].strip()
                 if line:
@@ -260,7 +260,7 @@ def sha256_file(path, limit=None):
 # --------------------------------------------------------------------------- compare
 def read_manifest(path):
     out = {}
-    with open(path, "r") as fh:
+    with open(path, "r", encoding="utf-8") as fh:
         for line in fh:
             if not line.strip() or line.startswith("#"):
                 continue

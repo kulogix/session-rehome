@@ -41,7 +41,7 @@ class H(BaseHTTPRequestHandler):
                         for k, v in self.headers.items()},
             "body_bytes": len(body),
         }
-        with open(os.path.join(OUT, "requests.ndjson"), "a") as f:
+        with open(os.path.join(OUT, "requests.ndjson"), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
         if body:
             with open(os.path.join(OUT, f"body_{i:03d}{self.path.replace('/', '_')}.json"), "wb") as f:

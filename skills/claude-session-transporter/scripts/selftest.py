@@ -132,20 +132,20 @@ try:
             {"type": "custom-title", "customTitle": "Fibonacci CLI", "sessionId": SID}]
     tx = os.path.join(pdir, SID + ".jsonl"); jl(tx, recs)
     jl(os.path.join(pdir, SID, "subagents", "agent-1.jsonl"), [{"type": "user", "uuid": "s1"}])
-    open(os.path.join(pdir, SID, "tool-results", "abc.txt"), "w").write("0 1 1 2 3 5\n")
-    os.makedirs(os.path.join(pdir, "memory")); open(os.path.join(pdir, "memory", "note.md"), "w").write("project note\n")
-    os.makedirs(os.path.join(ch, "tasks", SID)); open(os.path.join(ch, "tasks", SID, "1.json"), "w").write("{}")
+    open(os.path.join(pdir, SID, "tool-results", "abc.txt"), "w", encoding="utf-8").write("0 1 1 2 3 5\n")
+    os.makedirs(os.path.join(pdir, "memory")); open(os.path.join(pdir, "memory", "note.md"), "w", encoding="utf-8").write("project note\n")
+    os.makedirs(os.path.join(ch, "tasks", SID)); open(os.path.join(ch, "tasks", SID, "1.json"), "w", encoding="utf-8").write("{}")
     sib = os.path.join(ch, "projects", key + "-worktree", SID, "workflows"); os.makedirs(sib)
-    open(os.path.join(sib, "wf.json"), "w").write("{}")
+    open(os.path.join(sib, "wf.json"), "w", encoding="utf-8").write("{}")
     other = os.path.join(pdir, "99999999-2222-4333-8444-555555555555.jsonl"); jl(other, [{"type": "user", "uuid": "z"}])
     for decoy in (".credentials.json", "history.jsonl", "settings.json"):
-        open(os.path.join(ch, decoy), "w").write('{"decoy": true}')
-    open(os.path.join(HA, ".claude.json"), "w").write('{"oauthAccount": {"accountUuid": "%s"}}' % A)
+        open(os.path.join(ch, decoy), "w", encoding="utf-8").write('{"decoy": true}')
+    open(os.path.join(HA, ".claude.json"), "w", encoding="utf-8").write('{"oauthAccount": {"accountUuid": "%s"}}' % A)
     os.makedirs(os.path.join(proj, "src")); os.makedirs(os.path.join(proj, "build"))
-    open(os.path.join(proj, "src", "fib.py"), "w").write("def fib(n):\n    return n\n")
-    open(os.path.join(proj, "build", "out.bin"), "w").write("x" * 100)
-    open(os.path.join(proj, ".env"), "w").write("TOKEN=secret\n")
-    open(os.path.join(proj, "id_rsa"), "w").write("-----BEGIN OPENSSH PRIVATE KEY-----\n")
+    open(os.path.join(proj, "src", "fib.py"), "w", encoding="utf-8").write("def fib(n):\n    return n\n")
+    open(os.path.join(proj, "build", "out.bin"), "w", encoding="utf-8").write("x" * 100)
+    open(os.path.join(proj, ".env"), "w", encoding="utf-8").write("TOKEN=secret\n")
+    open(os.path.join(proj, "id_rsa"), "w", encoding="utf-8").write("-----BEGIN OPENSSH PRIVATE KEY-----\n")
     pa = desktop_profile(HA, "acct-o", A, OA)
     json.dump({"sessionId": "local_e0e0e0e0-0000-4000-8000-000000000001", "cliSessionId": SID, "cwd": proj,
                "originCwd": proj, "title": "Fibonacci CLI", "effort": "max", "permissionMode": "auto",
@@ -307,11 +307,11 @@ try:
     stg = os.path.join(HB, "staging"); stg = os.path.join(stg, os.listdir(stg)[0])
     os.chmod(os.path.join(stg, "claude"), 0o755)
     json.dump({"theme": "dark", "enabledPlugins": {"p": True}, "permissions": {"allow": ["x"]}},
-              open(os.path.join(stg, "claude", "settings.json"), "w"))
+              open(os.path.join(stg, "claude", "settings.json"), "w", encoding="utf-8"))
     HD = os.path.join(root, "dest3"); chd = os.path.join(HD, ".claude"); os.makedirs(chd)
     base = ["--checkpoint", stg, "--claude-home", chd, "--no-skills", "--allow-existing"]
     rc, o = py(TRANSPLANT, "--apply", *base, "--dest-root", os.path.join(HD, "p1"), "--settings-key", "theme", home=HD)
-    sd = json.load(open(os.path.join(chd, "settings.json"))) if os.path.isfile(os.path.join(chd, "settings.json")) else {}
+    sd = json.load(open(os.path.join(chd, "settings.json"), encoding="utf-8")) if os.path.isfile(os.path.join(chd, "settings.json")) else {}
     check(rc == 0 and sd == {"theme": "dark"}, "--settings-key REPLACES the defaults (was: always appended to them)")
     os.remove(os.path.join(chd, "settings.json"))
     rc, o = py(TRANSPLANT, "--apply", *base, "--dest-root", os.path.join(HD, "p2"), "--no-settings", home=HD)
@@ -320,7 +320,7 @@ try:
     print("origin-proof + st-verify.sh --origin-proof")
     proof = os.path.join(root, "proof.json")
     rc, o = py(BUNDLE, "origin-proof", out, "--claude-home", ch, "-o", proof, home=HA)
-    check(rc == 0 and "UNCHANGED" in o and json.load(open(proof))["prefix_sha256"] == man["transcript"]["sha256"],
+    check(rc == 0 and "UNCHANGED" in o and json.load(open(proof, encoding="utf-8"))["prefix_sha256"] == man["transcript"]["sha256"],
           "origin-proof on an untouched origin: UNCHANGED")
     staged = os.path.join(HB, "staging")
     vargs = [VERIFY, "--checkpoint", os.path.join(staged, os.listdir(staged)[0]) if os.path.isdir(staged) else staged,
@@ -347,7 +347,7 @@ try:
     print("st-checkpoint.sh --no-memory")
     if BASH_OK and shutil.which("rsync"):
         conf = os.path.join(root, "mig.conf")
-        open(conf, "w").write(f"ST_ORIGIN_HOST=local\nST_ORIGIN_ROOT='{proj}'\nST_ORIGIN_CLAUDE='{ch}'\n"
+        open(conf, "w", encoding="utf-8").write(f"ST_ORIGIN_HOST=local\nST_ORIGIN_ROOT='{proj}'\nST_ORIGIN_CLAUDE='{ch}'\n"
                               f"ST_ORIGIN_KEY='{key}'\nST_SESSION_ID={SID}\nST_DEST_ROOT='{dest}'\n"
                               f"ST_CLAUDE_HOME='{chb}'\nST_CKPT_ROOT='{root}/ckpt'\nST_CKPT=$ST_CKPT_ROOT/latest-$ST_SESSION_ID\n")
         rc, o = run(["bash", os.path.join(HERE, "st-checkpoint.sh"), "--profile", conf, "--no-excludes", "--no-memory",

@@ -57,7 +57,7 @@ Project, docs and issues: https://github.com/kulogix/claude-session-rehome
 """
 import argparse, datetime, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
 
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 PROJECT_URL = "https://github.com/kulogix/claude-session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
@@ -214,7 +214,7 @@ def procs():
             try:
                 with open(f"{d}/cmdline", "rb") as f:
                     raw = f.read()
-                with open(f"{d}/stat") as f:
+                with open(f"{d}/stat", encoding="utf-8") as f:
                     ppid = int(f.read().rsplit(")", 1)[1].split()[1])
             except (OSError, ValueError, IndexError):
                 continue
@@ -881,7 +881,7 @@ def archive(p, kind, dirs, plan):
                "created_utc": ts, "dirs": {str(i): d for i, d in enumerate(dirs)},
                "existed": {d: os.path.isdir(d) for d in dirs},
                "parent_existed": {d: os.path.isdir(os.path.dirname(d)) for d in dirs}, "plan": plan}, 2)
-    open(os.path.join(root, "COMPLETE"), "w").close()
+    open(os.path.join(root, "COMPLETE"), "w", encoding="utf-8").close()
     return name
 
 
@@ -1625,7 +1625,7 @@ def doctor():
              "no Desktop log yet: launch it once; until then the target org comes from folders/registry")
     try:
         os.makedirs(STATE, 0o700, exist_ok=True)
-        t = os.path.join(STATE, f".w{os.getpid()}"); open(t, "w").close(); os.remove(t)
+        t = os.path.join(STATE, f".w{os.getpid()}"); open(t, "w", encoding="utf-8").close(); os.remove(t)
         line(True, f"state dir {short(STATE)} writable")
     except OSError as e:
         line(False, f"state dir {short(STATE)}: {e}", "set CCD_REHOME_STATE to a writable folder")
@@ -1703,9 +1703,9 @@ def report(found, checks):
 def main():
     global DRY
     os.umask(0o077)
-    for stream in (sys.stdout, sys.stderr):         # a title with an emoji must not crash a Windows console
-        try:
-            stream.reconfigure(errors="replace")
+    for stream in (sys.stdout, sys.stderr):         # a title with an emoji must not crash a Windows console,
+        try:                                        # and a pipe gets UTF-8 (Windows would default to cp1252)
+            stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
     ap = argparse.ArgumentParser(prog="ccd-rehome", usage=__doc__.split("\n\n")[1],

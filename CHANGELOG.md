@@ -4,6 +4,19 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.9.3 — 2026-11-08
+
+- **Every text file is read and written as UTF-8, on every OS.** 36 text-mode `open()` calls named no encoding, so
+  on Windows they used the ANSI code page (cp1252). Found by the Windows CI run: `st-transplant.py` wrote the
+  destination `CLAUDE.md` in cp1252, and it appends the relocation notice to the transcript the same way (the
+  notice keeps non-ASCII characters verbatim, so on Windows it would have put non-UTF-8 bytes into a
+  conversation file, or crashed). Fixed in all scripts (the tools, their helpers and both self-tests); a new
+  static test fails on any text-mode `open()` without an explicit encoding.
+- `ccd-rehome` writes UTF-8 to a pipe too, like the transporter's tools.
+
+**Tested:** `python3 tests/run_all.py` on Linux: rehome 112/112, transporter 39/39, repository tests pass. Windows
+results come from CI.
+
 ## 0.9.2 — 2026-11-07
 
 - **`st-bundle.py` and `st-transplant.py` write UTF-8 on every OS.** On Windows, output to a pipe defaulted to the
