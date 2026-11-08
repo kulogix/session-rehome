@@ -16,7 +16,10 @@ Fixes from the first CI run on Windows (Windows remains experimental).
   turned them into CRLF, which broke the SKILL.md frontmatter and the shell scripts under Git Bash.
 - **Tests:** the self-test's stand-in `claude` is a `.cmd` file on Windows, so the "older CLI" warning is tested
   there too; the repository tests read CRLF files the same as LF; `tests/run_all.py` prints the tool output under
-  each failing self-test check, so a CI log shows why. CI uses the current major versions of its actions.
+  each failing self-test check (and the traceback when one crashes), so a CI log shows why. The transporter
+  self-test tests whether `bash` actually runs (on Windows, PATH can find the WSL launcher, which runs nothing
+  without a distribution): its pure-Python checks run everywhere, and on Windows it says which `.sh` checks it
+  skipped. CI uses the current major versions of its actions.
 
 **Tested:** `python3 tests/run_all.py` on Linux (rehome self-test 112/112, transporter 39/39, repository tests).
 Windows results come from CI.

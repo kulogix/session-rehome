@@ -56,9 +56,11 @@ class DocsMatchTools(unittest.TestCase):
             try:
                 r = subprocess.run(["bash", os.path.join(ST_SCRIPTS, t), "--help"], capture_output=True, text=True,
                                    timeout=60)
-                cls.shell_help[t] = r.stdout + r.stderr
+                text = r.stdout + r.stderr
+                # only a real help text counts: on Windows, PATH may find the WSL launcher, which runs nothing
+                cls.shell_help[t] = text if t in text or "--profile" in text else None
             except (OSError, subprocess.SubprocessError):
-                cls.shell_help[t] = None          # no bash here (plain Windows): CI's POSIX runners check these
+                cls.shell_help[t] = None          # no usable bash here: CI's POSIX runners check these
         cls.docs = {os.path.relpath(p, ROOT): code_lines(read_text(p) or "") for p in doc_files()}
 
     def test_rehome_usage_and_parser_agree(self):
@@ -110,6 +112,8 @@ class DocsMatchTools(unittest.TestCase):
 
     def test_transporter_script_flags(self):
         """Every --flag shown after st-transplant.py or an st-*.sh script is in that script's --help."""
+        if not any(self.shell_help.values()):
+            print("\n  (st-*.sh flags not checked here: bash cannot run on this machine; the POSIX CI runners check them)")
         tools = [("st-transplant.py", self.transplant_help)] + [(t, h) for t, h in self.shell_help.items() if h]
         if self.shell_help.get("st-verify.sh"):
             tools.append(("st-verify", self.shell_help["st-verify.sh"]))       # the install.py launcher

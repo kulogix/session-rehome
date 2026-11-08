@@ -40,10 +40,12 @@ def main():
                 if line.startswith("  FAIL "):
                     print("   " + line.strip())
                     detail = True
-                elif detail and line.startswith("    |"):
+                elif detail and line.startswith("    ") and not line.startswith("  PASS "):
                     print("   " + line)
                 else:
                     detail = False
+            if p.returncode and "Traceback" in out:  # a crash ends the self-test early: show where
+                print("\n".join("   | " + l for l in out[out.rindex("Traceback"):].splitlines()[-15:]))
             if p.returncode and not failed:
                 print("\n".join("   | " + l for l in out.splitlines()[-25:]))
             results.append(p.returncode == 0)

@@ -29,7 +29,7 @@ def check(cond, msg):
     if not cond:
         fails.append(msg)
         if os.environ.get("SELFTEST_VERBOSE"):
-            print("    | " + LAST[0].strip().replace("\n", "\n    | ")[-2500:])
+            print("\n".join("    | " + l for l in LAST[0].strip().splitlines()[-40:]))
 
 
 def run(cmd, home, env=None, inp=None):
@@ -55,6 +55,31 @@ def tree_hash(d):
             if os.path.isfile(p):
                 h.update(open(p, "rb").read())
     return h.hexdigest()
+
+
+def bash_works():
+    """True only if `bash` really runs here. On Windows, PATH can find the WSL launcher, which runs nothing without
+    a WSL distribution installed."""
+    if not shutil.which("bash"):
+        return False
+    try:
+        r = subprocess.run(["bash", "-c", "echo ok"], capture_output=True, text=True, timeout=60)
+        return r.stdout.strip() == "ok"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+BASH_OK = bash_works()
+WIN = sys.platform.startswith("win")
+
+
+def no_bash(what):
+    """Bash is part of the POSIX path (a missing bash there is a failure); on Windows the .sh tools run under WSL
+    or Git Bash, so say plainly that their checks did not run."""
+    if WIN:
+        print(f"  (skipped {what}: bash cannot run here; on Windows the .sh tools run under WSL or Git Bash)")
+    else:
+        check(False, f"bash is needed for {what}")
 
 
 def sha(p, n=None):
@@ -221,7 +246,8 @@ try:
     dk = mangle(dest); dtx = os.path.join(chb, "projects", dk, SID + ".jsonl")
     check(os.path.isfile(dtx) and sha(dtx, man["transcript"]["prefix_len"]) == man["transcript"]["sha256"],
           "transcript under mangle(destination) with the origin bytes as an exact prefix")
-    check(os.path.getsize(dtx) > man["transcript"]["prefix_len"], "relocation notice appended (append-only)")
+    check(os.path.isfile(dtx) and os.path.getsize(dtx) > man["transcript"]["prefix_len"],
+          "relocation notice appended (append-only)")
     check(all(os.path.isfile(p) for p in (os.path.join(chb, "projects", dk, SID, "subagents", "agent-1.jsonl"),
                                          os.path.join(chb, "projects", dk, SID, "tool-results", "abc.txt"),
                                          os.path.join(chb, "projects", dk, "memory", "note.md"),
@@ -262,7 +288,9 @@ try:
     check(rc == 0 and cm.count("relocation notice: " + SID) == 2 and "BEGIN claude-session-transporter" in cm
           and "BEGIN session-transporter" not in cm and "old table" not in cm and "keep me" in cm,
           "a block written under the old skill name is REPLACED (upgraded), not duplicated; user text kept")
-    if shutil.which("bash"):
+    if not BASH_OK:
+        no_bash("the st-verify.sh legacy-marker check")
+    else:
         open(os.path.join(destl, "CLAUDE.md"), "w", encoding="utf-8").write(
             f"<!-- BEGIN session-transporter relocation notice: {SID} -->\nold\n<!-- END session-transporter relocation notice: {SID} -->\n")
         stl = os.path.join(HL, "staging"); stl = os.path.join(stl, os.listdir(stl)[0])
@@ -289,28 +317,30 @@ try:
     rc, o = py(BUNDLE, "origin-proof", out, "--claude-home", ch, "-o", proof, home=HA)
     check(rc == 0 and "UNCHANGED" in o and json.load(open(proof))["prefix_sha256"] == man["transcript"]["sha256"],
           "origin-proof on an untouched origin: UNCHANGED")
-    if shutil.which("bash"):
-        vargs = [VERIFY, "--checkpoint", os.path.join(HB, "staging", os.listdir(os.path.join(HB, "staging"))[0]),
-                 "--dest-root", dest, "--session-id", SID, "--claude-home", chb, "--no-probe", "--origin-proof", proof]
+    staged = os.path.join(HB, "staging")
+    vargs = [VERIFY, "--checkpoint", os.path.join(staged, os.listdir(staged)[0]) if os.path.isdir(staged) else staged,
+             "--dest-root", dest, "--session-id", SID, "--claude-home", chb, "--no-probe", "--origin-proof", proof]
+    if BASH_OK:
         rc, o = run(["bash", *vargs], HB)
         check("origin proof" in o and "identical to the checkpoint" in o and "NOTRUN origin" not in o,
               "st-verify.sh accepts a proof made on the origin (no more NOTRUN when it cannot reach back)")
         check("coverage: every checkpoint file is present at the destination" in o and "NOTRUN destination" not in o,
               "an imported bundle carries the project manifest st-verify.sh checks coverage against")
-        with open(tx, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"type": "user", "uuid": "later"}) + "\n")
-        rc, o = py(BUNDLE, "origin-proof", out, "--claude-home", ch, "-o", proof, home=HA)
-        check(rc == 0 and "GROWN" in o, "origin resumed after export: prefix unchanged, reported as a fork")
-        b = open(tx, "rb").read(); open(tx, "wb").write(b.replace(b"fibonacci", b"FIBONACCI", 1))
-        rc, o = py(BUNDLE, "origin-proof", out, "--claude-home", ch, "-o", proof, home=HA)
-        check(rc != 0 and "CHANGED" in o, "history edited on the origin: CHANGED")
+    with open(tx, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "user", "uuid": "later"}) + "\n")
+    rc, o = py(BUNDLE, "origin-proof", out, "--claude-home", ch, "-o", proof, home=HA)
+    check(rc == 0 and "GROWN" in o, "origin resumed after export: prefix unchanged, reported as a fork")
+    b = open(tx, "rb").read(); open(tx, "wb").write(b.replace(b"fibonacci", b"FIBONACCI", 1))
+    rc, o = py(BUNDLE, "origin-proof", out, "--claude-home", ch, "-o", proof, home=HA)
+    check(rc != 0 and "CHANGED" in o, "history edited on the origin: CHANGED")
+    if BASH_OK:
         rc, o = run(["bash", *vargs], HB)
         check("CHANGED" in o and "something wrote to the origin" in o, "st-verify.sh fails on a CHANGED proof")
     else:
-        check(False, "bash is needed for the st-verify.sh checks (Windows: run under Git-Bash or WSL)")
+        no_bash("the st-verify.sh checks (origin proof, coverage)")
 
     print("st-checkpoint.sh --no-memory")
-    if shutil.which("bash") and shutil.which("rsync"):
+    if BASH_OK and shutil.which("rsync"):
         conf = os.path.join(root, "mig.conf")
         open(conf, "w").write(f"ST_ORIGIN_HOST=local\nST_ORIGIN_ROOT='{proj}'\nST_ORIGIN_CLAUDE='{ch}'\n"
                               f"ST_ORIGIN_KEY='{key}'\nST_SESSION_ID={SID}\nST_DEST_ROOT='{dest}'\n"
