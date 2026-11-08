@@ -1,0 +1,41 @@
+# st-checkpoint.sh exclude file — one pattern per line, then '#' and a JUSTIFICATION.
+#
+# RULES, each of which cost something when it was broken:
+#
+#   * ANCHOR every pattern with a leading '/'. An unanchored pattern matches by NAME
+#     anywhere in the tree. `--exclude='target/'` looks like "skip build output" and on
+#     the real run it would have dropped `_research/re/target/`, which was the ground-truth
+#     ORACLE BINARY DROP DIR, not cargo output.
+#   * JUSTIFY every pattern against an actual listing of that directory — not against what
+#     its name suggests. `--exclude='_research/re/rust/'` was meant to skip a cargo target
+#     dir; it dropped 26 files / 1.44 MB of irreplaceable source including the keystone
+#     `fasp-core/src/cap.rs`. The correct pattern was `/_research/re/rust/target/`.
+#   * READ THE ACCOUNTING st-checkpoint.sh prints. Every pattern comes back with a file and
+#     byte count. An over-broad exclude must show up as a NUMBER, never as silence.
+#   * A pattern that removes 0 files is also worth noticing: it usually means you guessed
+#     the path wrong and something you meant to skip is still coming along.
+#
+# Supported syntax (a documented subset of rsync's, implemented identically by st_walk.py
+# so the accounting and the transfer cannot disagree):
+#   /a/b/        anchored directory
+#   /a/b         anchored path of any type
+#   name/        any directory component called `name`, anywhere   (UNANCHORED)
+#   *.pyc        fnmatch against any path component                (UNANCHORED)
+# '**' is rejected: rsync's meaning for it is not reproduced here.
+#
+# An UNANCHORED pattern must be declared as such, with the `unanchored:` prefix. That is
+# the whole point: it makes "this matches by name everywhere" a decision you typed, not a
+# default you inherited.
+
+# ---- examples. DELETE THESE and write your own against a real listing. ----
+
+/rust/target/                            # cargo build output; verified by `ls`: only *.rlib/*.o/build/
+/node_modules/                           # npm install output, regenerable from package-lock.json
+unanchored:__pycache__/                  # bytecode caches, regenerable, appear at every depth
+unanchored:*.pyc                         # bytecode, regenerable
+unanchored:.pytest_cache/                # test runner cache
+unanchored:.DS_Store                     # macOS Finder junk
+
+# ---- patterns that look right and are NOT. Kept here as a warning. ----
+# /_research/re/rust/                    # WRONG: this is source, not build output
+# unanchored:target/                     # WRONG: matched the oracle binary drop dir too

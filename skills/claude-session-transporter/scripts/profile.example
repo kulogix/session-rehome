@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# session-transporter profile — a plain shell file, sourced by every st-* script
+# (`--profile FILE`). COMMAND-LINE FLAGS ALWAYS WIN over what is set here: each script
+# sources the profile before parsing its arguments, so a flag you type overrides it.
+#
+# EVERY VALUE BELOW IS A DELIBERATE PLACEHOLDER. The scripts refuse to run while any of
+# them still contains `REPLACE-ME`, `<...>` or `/path/to/`. Do not "fill in the origin
+# block and leave the rest, it looks plausible" — the destination block is what
+# st-transplant.py --apply writes to.
+#
+# The easy way to produce a real one:
+#     st-preflight.sh --origin-host HOST --list-sessions          # find the session id
+#     st-preflight.sh --session-id <ID> --origin-root <R> --dest-root <D> \
+#                     --emit-profile ./mig.conf
+# then pass `--profile ./mig.conf` to every later script and keep it beside the checkpoint:
+# it is the record of what a given migration actually was.
+
+# ---- ORIGIN -----------------------------------------------------------------
+ST_ORIGIN_HOST=REPLACE-ME-hostname        # ssh host; "local" for a same-host migration
+                                          # or an offline archive mounted on this box
+ST_ORIGIN_ROOT=/path/to/origin/project
+ST_ORIGIN_CLAUDE=/path/to/origin/home/.claude   # absolute; no shell expansion happens remotely
+
+# The LITERAL project-dir name as observed on the origin. Never derive it by editing
+# another key: the mangler maps every non-alphanumeric character to '-', so `net.sim`,
+# `net_sim` and `net-sim` all collapse to the same key. st-preflight.sh prints the real
+# one; paste that. Leave it empty to let the probe choose (it refuses to guess when more
+# than one key holds the session).
+ST_ORIGIN_KEY=REPLACE-ME-literal-observed-key
+
+# The CLI session id == the transcript filename stem. It MUST NOT change during the
+# migration: sidecars resolve as <transcript path minus .jsonl>/{subagents,...}.
+# `st-preflight.sh --list-sessions` lists the candidates with the opening words of each.
+ST_SESSION_ID=REPLACE-ME-00000000-0000-0000-0000-000000000000
+
+# ---- DESTINATION ------------------------------------------------------------
+ST_DEST_ROOT=/path/to/destination/project
+ST_CLAUDE_HOME=$HOME/.claude              # transcripts live here, NOT in the user-data-dir
+
+# Desktop only. LEAVE ALL THREE COMMENTED OUT for a CLI-only migration, which is a
+# complete path on its own. A wrong user-data-dir points --apply at some other instance's
+# live session store.
+# ST_USER_DATA_DIR=/path/to/user-data-dir
+# ST_ACCOUNT=<accountUuid>
+# ST_ORG=<organizationUuid>
+
+# ---- CHECKPOINTS ------------------------------------------------------------
+ST_CKPT_ROOT=/path/to/checkpoints
+# Use the per-session pointer, not bare `latest`: one checkpoint root shared by several
+# migrated sessions leaves `latest` naming only the last of them.
+ST_CKPT=$ST_CKPT_ROOT/latest-$ST_SESSION_ID
+
+# ---- OPTIONAL ---------------------------------------------------------------
+# ST_CLI=/path/to/claude                  # destination binary, for the load probe
+# ST_CLI_VERSION=0.0.0                    # stamped into any appended record
+# ST_SSH_OPTS="-o BatchMode=yes -o ControlMaster=auto -o ControlPath=/tmp/st-%r@%h:%p -o ControlPersist=10m"

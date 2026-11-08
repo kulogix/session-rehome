@@ -1,0 +1,1876 @@
+#!/usr/bin/env python3
+"""ccd-rehome — list, and move between accounts, the Code sessions of any Claude Desktop profile (user-data-dir).
+Desktop only shows the sessions filed under the account (and org) that is signed in; this puts them there.
+
+  ccd-rehome profiles [--json]                   every Desktop profile found on this host (see "Discovery")
+  ccd-rehome status   [PROFILE ...] [--json]     per profile: signed in as whom, running?, visible vs stranded
+  ccd-rehome sessions PROFILE [--json]           every session record in the profile, the account it is filed
+                                                 under, and whether Desktop shows it now
+  ccd-rehome accounts [--json]                   known account ids -> emails / orgs (registry, refreshed every run)
+  ccd-rehome rehome   PROFILE ... | --all [--dry-run] [--include-cowork]
+                                                 everything stranded -> the signed-in account (the common case)
+  ccd-rehome move     PROFILE [--to ACCOUNT] [--to-org ORG] [--from ACCOUNT ...] [--only ID ...]
+                      [--include-cowork] [--dry-run]
+  ccd-rehome move     PROFILE --only ID ... --to-profile PROFILE2 [--to ACCOUNT] [--dry-run]
+                                                 to ANOTHER user-data-dir on this host (record only: the conversation
+                                                 is shared); any/all sessions -> any account. --to defaults to the signed-in
+                                                 account; ACCOUNT = email, uuid or uuid prefix
+  ccd-rehome rollback PROFILE ARCHIVE [--dry-run]   undo one move or adopt exactly (archive names: `status PROFILE`)
+  ccd-rehome export-record PROFILE --only ID [--out FILE]
+                                                 one session record as a portable ccd-record/1 file (account-bound
+                                                 and transient fields stripped, no account ids) - for transplants
+  ccd-rehome adopt    PROFILE --record FILE [--to ACCOUNT] [--to-org ORG] [--cwd PATH] [--cli-session-id ID]
+                      [--title T] [--accept-drift] [--dry-run]
+                                                 file a ccd-record/1 into this profile (default: the signed-in
+                                                 account); idempotent; archived; undone by rollback
+  ccd-rehome cli-sessions [--json]               Claude Code conversations that NO Desktop profile lists (CLI-only)
+  ccd-rehome register PROFILE --cli-session-id ID [--cwd DIR] [--to ACCOUNT] [--title T] [--dry-run]
+                                                 CLI -> Desktop: give a CLI conversation a Desktop record (never via
+                                                 Desktop's "Recover CLI sessions", which rewrites the transcript)
+  ccd-rehome resume-cli PROFILE --only ID        Desktop -> CLI: the exact, checked `claude --resume` command
+  ccd-rehome unregister PROFILE --only ID [--dry-run]   remove a Desktop record (archived; rollback undoes it)
+  ccd-rehome quit     PROFILE                    graceful quit (SIGTERM to the main process = Desktop's own quit)
+  ccd-rehome launch   PROFILE                    claude-desktop [--user-data-dir=...]
+  ccd-rehome verify   PROFILE                    after a launch: did Desktop load every record in the signed-in dir?
+  ccd-rehome doctor                              new machine? checks Python, platform, Desktop, profiles, drift,
+                                                 tested versions; writes nothing
+  ccd-rehome report [CHECK ...]                  a redacted compatibility entry for tested.json (CHECKs = what you
+                                                 ran, e.g. selftest dry-run rehome verify rollback)
+
+  Validation: before any move, every file it touches is checked against the known formats. ERROR (format broken
+  or changed) always refuses; DRIFT (new fields/files) refuses a real run unless --accept-drift; --dry-run always
+  shows the report and writes nothing at all.
+
+  Exit codes: 0 = done / nothing to do / OK.  1 = refused, failed, or verify MISMATCH (message says why).
+  2 = bad command line. Every report command takes --json; parse that rather than the text.
+
+  PROFILE = `default` (plain claude-desktop), a name under ~/.claude-instances (acct-e), or ANY user-data-dir path.
+
+Discovery (for `profiles`, `status` and `--all`): the default profile, ~/.claude-instances/*, every
+--user-data-dir of a running Desktop, every --user-data-dir in a .desktop launcher, every path this tool was ever
+given, and $CCD_REHOME_PROFILES (paths separated by ':', or ';' on Windows).
+
+Never signs in or out, never reads credentials, never copies or edits transcripts (~/.claude/projects/), never
+touches another profile. Writes only session records + their side files inside the profile, an archive before
+every change, and its own state dir. See ../README.md and ../references/mechanics.md.
+"""
+import argparse, datetime, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
+
+VERSION = "0.8.0"
+TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
+
+HOME = os.environ.get("CCD_REHOME_HOME") or os.path.expanduser("~")
+INST = os.path.join(HOME, ".claude-instances")
+STATE = os.environ.get("CCD_REHOME_STATE") or os.path.join(INST, "_rehome")
+ARCHIVE = os.path.join(STATE, "archive")
+REGISTRY = os.path.join(STATE, "accounts.json")
+KNOWN_PROFILES = os.path.join(STATE, "profiles.json")
+PROJECTS = os.path.join(HOME, ".claude", "projects")
+# CCD_REHOME_PLATFORM lets the sandboxed self-test exercise the macOS / Windows layouts on any OS
+PLATFORM = (os.environ.get("CCD_REHOME_PLATFORM") if os.environ.get("CCD_REHOME_SANDBOX") == "1" else None) or sys.platform
+MAC, WIN = PLATFORM == "darwin", PLATFORM.startswith("win")
+DEFAULT_PROFILE = (os.path.join(HOME, "Library", "Application Support", "Claude") if MAC else
+                   os.path.join((os.environ.get("APPDATA") if not os.environ.get("CCD_REHOME_SANDBOX") == "1" else None)
+                                or os.environ.get("CCD_REHOME_APPDATA") or os.path.join(HOME, "AppData", "Roaming"),
+                                "Claude") if WIN
+                   else os.path.join(HOME, ".config", "Claude"))
+# macOS Electron apps log to ~/Library/Logs/<App>; that dir may be shared by every instance of the app
+MAC_LOGS = os.path.join(HOME, "Library", "Logs", "Claude")
+SUPPORT = "verified" if PLATFORM.startswith("linux") else "experimental (untested on this OS)"
+SANDBOX = os.environ.get("CCD_REHOME_SANDBOX") == "1"      # self-test: no process scans, no real launches
+UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+ARCH_RE = re.compile(r"\d{8}T\d{6}Z-(move|rehome|adopt|unregister|pre-rollback)")
+# Per-account state inside a record: claude.ai connectors and Remote Control. Meaningless (or wrong) elsewhere.
+ACCOUNT_BOUND = ("remoteMcpServersConfig", "withheldConnectorHosts", "remoteControlAutoEligible",
+                 "steeredByRemoteClient", "bridgeSessionIds")
+# Fields that point at the ORIGIN MACHINE (its filesystem, displays, apps, browser tabs). Kept on a same-host move;
+# dropped when a record is adopted on another host / under another cwd (`adopt --cwd`), where they would name
+# things that do not exist. cwd/originCwd are rewritten instead.
+HOST_BOUND = ("gitAnchors", "gitAnchorsFolderRealpath", "gitAnchorsLookupOnly", "planPath", "shellFolders",
+              "chromeTabGroupId", "cuSelectedDisplayId", "cuLastScreenshotDims", "cuAllowedApps")
+# Transient state Desktop recreates if still true.
+TRANSIENT = ("cliBinaryPin", "error", "errorAt", "errorRows", "priorErrorMark")
+# Models that only exist on a local/3p gateway; an Anthropic account cannot start them.
+LOCAL_MODEL_RE = re.compile(os.environ.get("CCD_REHOME_LOCAL_MODEL_RE", r"^claude-local-.*$"))
+FALLBACK_MODEL = os.environ.get("CCD_REHOME_FALLBACK_MODEL", "claude-opus-5-5")
+STORES = {"code": "claude-code-sessions", "cowork": "local-agent-mode-sessions"}
+# Linux launcher commands, in order. The community Debian package renamed itself at Desktop 4.x
+# (claude-desktop -> claude-desktop-unofficial; the old name became an empty transitional package).
+LINUX_LAUNCHERS = ("claude-desktop", "claude-desktop-unofficial")
+# ---- The contract with Desktop. `doctor` reports anything outside it as DRIFT, so a Desktop update that adds a
+# field, a file or a log format is noticed, classified and handled HERE (see SKILL.md "Maintaining this skill").
+# Record keys whose handling is decided: everything listed is KEPT unless it is in ACCOUNT_BOUND or TRANSIENT.
+KNOWN_KEYS = set(ACCOUNT_BOUND) | set(TRANSIENT) | {
+    "alwaysAllowedReasons", "armedWorkAtQuit", "autoChosenInApp", "autoModeServerFallbackPrompt", "chromePermissionMode",
+    "classifierSummaryEnabled", "cliSessionId", "completedTurns", "createdAt", "cwd", "devIntentTriggers", "devIntents",
+    "effort", "envScopeId", "gitAnchors", "gitAnchorsFolderRealpath", "gitAnchorsLookupOnly", "isArchived",
+    "lastActivityAt", "lastAssistantUuid", "lastFocusedAt", "lastSpawnRootDetected", "lastTurnCutShort",
+    "latestUserFrameAt", "model", "originCwd", "permissionMode", "postTurnSummary", "postTurnSummaryFor",
+    "priorCliSessionIds", "promptAppendSnapshot", "promptSuggestion", "publishedArtifacts", "reportFindingsCard",
+    "resolvedBackgroundTaskSuggestions", "rewindEdges", "scratchOfferFolder", "scratchPromptRecents", "sessionId",
+    "sessionPermissionUpdates", "sessionSettings", "spawnSeed", "terminalClaudeTabOrdinal", "title", "titleSource",
+    "titleTurn", "toolSurfaceSnapshot", "transcriptModelStates", "transcriptUnavailable", "writtenBranches",
+    # Desktop 4.x (first seen 4.23118.0, macOS): computer-use / Chrome grants for the session, turn bookkeeping,
+    # history and links. Session state, kept.
+    "chromeAllowedDomains", "chromeTabGroupId", "contextExceededCount", "cuAllowedApps", "cuGrantFlags",
+    "cuLastScreenshotDims", "cuSelectedDisplayId", "interruptedAwaitingPerson", "lastAssistantCliSessionId",
+    "lastTurnEdgeAt", "planPath", "previousTitles", "queryCrashes", "shellFolders", "spawnedFrom", "turnBoxDeclared",
+    "turnBoxMounted", "turnWrapUp"}
+# Entries that may appear inside an <account>/<org> session dir, per store.
+#   code:   records, tombstones, task suggestions, scheduled tasks, waiting-input (pending input snapshots, 4.x)
+#   cowork: sessions (local_*), plus in 4.x a per-account workspace: caches/config Desktop recreates (left in place)
+#           and USER DATA whose link to sessions is not yet understood (spaces, agents) -> a Cowork move refuses.
+KNOWN_ENTRIES = re.compile(r"^(local_.+\.json|deleted_.+|backlog|scheduled-tasks\.json|waiting-input|.*\.rehome-tmp-\d+)$")
+COWORK_CACHE = {"rpm", "cowork_plugins", "cowork-gb-cache.json", ".claude.json", ".claude.json.lock", "backups", "debug",
+                "scheduled-tasks.json"}
+COWORK_USERDATA = {"spaces.json", "agent", "cowork_settings.json"}
+
+
+def entry_class(store, name):
+    """known | cache | userdata | unknown, for one entry of an <account>/<org> dir."""
+    if name.endswith(".rehome-tmp-" + name.rsplit("-", 1)[-1]) and name.rsplit("-", 1)[-1].isdigit():
+        return "known"
+    if store == "cowork":
+        if name.startswith("local_"):
+            return "known"
+        return "cache" if name in COWORK_CACHE else "userdata" if name in COWORK_USERDATA else "unknown"
+    return "known" if KNOWN_ENTRIES.match(name) else "unknown"
+
+
+def has_content(path):
+    """A user-data entry that actually holds something (an empty {} / [] / folder does not count)."""
+    if os.path.isdir(path):
+        return any(fs for _, _, fs in os.walk(path))
+    try:
+        v = load(path)
+        return bool(v) and not (isinstance(v, dict) and all(not x for x in v.values()))
+    except (OSError, ValueError):
+        return os.path.getsize(path) > 0
+_LOG_CACHE = {}
+DRY = False
+
+
+def say(m=""): print(m, flush=True)
+def die(m): sys.exit(f"ccd-rehome: {m}")
+def load(p):
+    with open(p, encoding="utf-8") as f:        # explicit: Windows' default (cp1252) would corrupt non-ASCII titles
+        return json.load(f)
+
+
+def now_utc(): return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
+def write_json(p, obj, indent=None):
+    if DRY:
+        say(f"  [dry-run] write {p}"); return
+    os.makedirs(os.path.dirname(p), 0o700, exist_ok=True)
+    tmp = f"{p}.rehome-tmp-{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=indent); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
+def remove(p):
+    if DRY:
+        say(f"  [dry-run] remove {p}")
+    elif os.path.isdir(p) and not os.path.islink(p):
+        shutil.rmtree(p)
+    else:
+        os.remove(p)
+
+
+def records(d):
+    return sorted(glob.glob(os.path.join(d, "local_*.json"))) if d and os.path.isdir(d) else []
+
+
+def sid_of(path): return os.path.basename(path)[:-5] if path.endswith(".json") else os.path.basename(path)
+
+
+def transcript(cli_id):
+    hits = glob.glob(os.path.join(PROJECTS, "*", f"{cli_id}.jsonl")) if cli_id else []
+    return hits[0] if hits else None
+
+
+def short(p): return "~" + p[len(HOME):] if p.startswith(HOME + os.sep) else p
+
+
+# ---------------- processes ----------------
+_PROCS = None
+
+
+def procs():
+    """{pid: (ppid, argv list, raw command line)} for every process, taken ONCE per run.
+    Linux: /proc. macOS: one `ps`. Windows: one PowerShell CIM query. Never sends a signal."""
+    global _PROCS
+    if _PROCS is not None:
+        return _PROCS
+    _PROCS = {}
+    me = os.getpid()
+    if os.path.isdir("/proc"):
+        for d in glob.glob("/proc/[0-9]*"):
+            pid = int(d[6:])
+            try:
+                with open(f"{d}/cmdline", "rb") as f:
+                    raw = f.read()
+                with open(f"{d}/stat") as f:
+                    ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue
+            # Chromium rewrites its argv into ONE space-joined string, so split on spaces as well
+            argv = [a.decode(errors="replace") for a in raw.replace(b" ", b"\0").split(b"\0") if a]
+            _PROCS[pid] = (ppid, argv, raw.replace(b"\0", b" ").decode(errors="replace"))
+    elif WIN:
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+               "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"]
+        try:
+            rows = json.loads(subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                             timeout=60).stdout or "[]")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            rows = []
+        for r in rows if isinstance(rows, list) else [rows]:
+            line = r.get("CommandLine") or ""
+            _PROCS[int(r["ProcessId"])] = (int(r.get("ParentProcessId") or 0), _split(line), line)
+    else:
+        try:
+            out = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,command="], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace").stdout
+        except OSError:
+            out = ""
+        for line in out.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) == 3 and parts[0].isdigit():
+                _PROCS[int(parts[0])] = (int(parts[1]), _split(parts[2]), parts[2])
+    _PROCS.pop(me, None)
+    return _PROCS
+
+
+def _split(line):
+    """argv from a flat command line (macOS ps / Windows): keep a quoted or space-containing --user-data-dir whole."""
+    m = re.search(r'--user-data-dir=("[^"]*"|\'[^\']*\'|.+?)(?=\s+--|\s*$)', line)
+    rest = (line[:m.start()] + line[m.end():]) if m else line
+    exe = re.match(r'\s*("[^"]+"|.+?\.(?:exe|app/Contents/MacOS/[^/]+?)(?=\s|$)|\S+)', rest)
+    first = exe.group(1).strip('"') if exe else ""
+    argv = [first] + rest[exe.end():].split() if exe else rest.split()
+    if m:
+        argv.append("--user-data-dir=" + m.group(1).strip("'\""))
+    return argv
+
+
+def _pids(): return list(procs())
+def _argv(pid): return procs().get(pid, (0, [], ""))[1]
+def _alive(pid): return pid in procs()
+
+
+def _cwd(pid):
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return HOME
+
+
+def _udd(pid, argv):
+    """The --user-data-dir of a process, resolved like Chromium does (relative to its cwd)."""
+    for x in argv:
+        if x.startswith("--user-data-dir="):
+            v = os.path.expanduser(x.split("=", 1)[1].strip("'\""))
+            return os.path.realpath(v if os.path.isabs(v) else os.path.join(_cwd(pid), v))
+    return None
+
+
+def _is_desktop(argv):
+    """The Desktop app's own binary. NOT the Claude Code CLI, which is also called `claude` (Desktop runs it as a
+    child, users run it in terminals): matching it would make every CLI session look like a running Desktop."""
+    if not argv:
+        return False
+    exe = argv[0].replace("\\", "/")
+    base = os.path.basename(exe)
+    if MAC:
+        return "/Claude.app/Contents/MacOS/" in exe and base == "Claude"
+    if WIN:
+        return base.lower() == "claude.exe" and "/anthropicclaude/" in exe.lower()
+    return base in ("claude-desktop", "claude-desktop-bin", "claude-desktop-unofficial") or \
+        (base == "electron" and "claude" in exe.lower())
+
+
+def _owned_by(argv, root, udd, profile):
+    """Does this process belong to the instance? Its binary lives in <profile>/claude-code/, or ANY argument does
+    (Desktop runs each session's CLI through a `disclaimer` wrapper whose own binary lives elsewhere: measured, a
+    quit that only looked at argv[0] declared the instance gone while that wrapper still held the transcript),
+    or its --user-data-dir is the profile."""
+    return any(x.startswith(root) for x in argv) or udd == profile
+
+
+def ancestors():
+    """pids of this process's parents, up to init. Used so the tool never quits the instance it runs inside."""
+    out, pid, seen = [], os.getppid(), set()
+    while pid and pid not in seen:
+        seen.add(pid); out.append(pid)
+        pid = procs().get(pid, (0,))[0]
+    return out
+
+
+# ---------------- profiles ----------------
+def _remembered():
+    try:
+        return load(KNOWN_PROFILES)
+    except (OSError, ValueError):
+        return []
+
+
+def _remember(path):
+    """Profiles outside the standard places are found again later only because we remember them."""
+    if DRY or path == os.path.realpath(DEFAULT_PROFILE) or os.path.dirname(path) == os.path.realpath(INST):
+        return
+    known = _remembered()
+    if path not in known:
+        known.append(path); write_json(KNOWN_PROFILES, known, 2)
+
+
+def name_for(path):
+    rp = os.path.realpath(path)
+    if rp == os.path.realpath(DEFAULT_PROFILE):
+        return "default"
+    if os.path.dirname(rp) == os.path.realpath(INST):
+        return os.path.basename(rp)
+    return short(rp)
+
+
+class Profile:
+    def __init__(self, spec):
+        if spec == "default":
+            path = DEFAULT_PROFILE
+        elif os.sep in spec or (os.altsep and os.altsep in spec) or spec.startswith((".", "~")):
+            path = os.path.abspath(HOME + spec[1:] if spec.startswith("~") else spec)
+        else:
+            path = os.path.join(INST, spec)
+        self.path = os.path.realpath(path)
+        self.name = name_for(self.path)
+        if self.path.endswith("-3p"):
+            die(f"{spec}: a -3p profile talks to a local gateway and has no Anthropic account; use the base profile")
+        if not os.path.isdir(self.path):
+            die(f"{self.path} does not exist")
+        if not os.path.exists(os.path.join(self.path, "config.json")):
+            die(f"{self.path} is not a Desktop profile (no config.json). Launch it once: "
+                f"claude-desktop --user-data-dir={self.path}")
+        # archive key: plain name for default / ~/.claude-instances, a stable slug for any other path
+        self.key = self.name if os.sep not in self.name else \
+            "path-" + re.sub(r"[^A-Za-z0-9._-]+", "_", self.name.lstrip("~").strip("/\\")) + "-" + \
+            hashlib.sha1(self.path.encode()).hexdigest()[:6]
+        _remember(self.path)
+
+    def store(self, kind="code"): return os.path.join(self.path, STORES[kind])
+
+    # ---- process state ----
+    def pids(self):
+        """Every process of this instance (Desktop, helpers, CLI children) plus Chromium's profile-lock holder."""
+        if SANDBOX:
+            return []
+        root = os.path.join(self.path, "claude-code") + "/"
+        is_default = self.path == os.path.realpath(DEFAULT_PROFILE)
+        out = []
+        for pid in _pids():
+            a = _argv(pid)
+            if not a:
+                continue
+            hit = _owned_by(a, root, _udd(pid, a), self.path)
+            # the plain instance's browser process has no --user-data-dir; helpers of OTHER instances (their
+            # zygotes) also lack one, so require "no --type=" too
+            if is_default and not hit and _is_desktop(a) and not any(x.startswith(("--user-data-dir=", "--type="))
+                                                                    for x in a):
+                hit = True
+            if hit:
+                out.append(pid)
+        try:
+            pid = int(os.readlink(os.path.join(self.path, "SingletonLock")).rsplit("-", 1)[1])
+            if _alive(pid) and pid not in out:
+                out.append(pid)
+        except (OSError, ValueError, IndexError):
+            pass
+        lf = os.path.join(self.path, "lockfile")             # Windows: held open exclusively while running
+        if WIN and os.path.exists(lf) and not out:
+            try:
+                open(lf, "rb").close()
+            except PermissionError:
+                out.append(-1)                               # running, pid unknown
+        return out
+
+    def browser_pid(self):
+        for p in self.pids():
+            a = _argv(p)
+            if _is_desktop(a) and not any(x.startswith("--type=") for x in a):
+                return p
+        return None
+
+    def require_quit(self):
+        p = self.pids()
+        if p and DRY:
+            say(f"  note: {self.name} is running; this dry run shows the plan, the real run needs it quit")
+            return
+        if p:
+            die(f"{self.name} is running (pids {p[:6]}). Quit it (File > Quit, or `ccd-rehome quit {self.name}`), "
+                f"then re-run.")
+
+    # ---- login state ----
+    def config(self):
+        try:
+            return load(os.path.join(self.path, "config.json"))
+        except (OSError, ValueError):
+            return {}
+
+    def session_cookie(self):
+        """(present, expires) of the claude.ai sessionKey cookie. Reads name/expiry only, never values."""
+        for c in (os.path.join(self.path, "Network", "Cookies"), os.path.join(self.path, "Cookies")):
+            if not os.path.exists(c):
+                continue
+            with tempfile.TemporaryDirectory() as td:
+                cp = os.path.join(td, "c.db")
+                try:
+                    shutil.copy2(c, cp)                      # Windows locks it while Desktop runs
+                    con = sqlite3.connect(cp)
+                    n, exp = con.execute("select count(*), max(expires_utc) from cookies where name like 'sessionKey%' "
+                                         "and host_key like '%claude.ai'").fetchone()
+                    con.close()
+                except (OSError, sqlite3.Error):
+                    return None, None
+            if not n:
+                return False, None
+            return True, (datetime.datetime(1601, 1, 1) + datetime.timedelta(microseconds=exp)) if exp else None
+        return False, None
+
+    def log_dir(self):
+        """(dir, shared). Linux/Windows: <profile>/logs. macOS: ~/Library/Logs/Claude, possibly shared by all
+        instances, so only path-bearing lines can be attributed to one profile there."""
+        own = os.path.join(self.path, "logs")
+        if glob.glob(os.path.join(own, "main*.log")):
+            return own, False
+        if MAC and os.path.isdir(MAC_LOGS):
+            return MAC_LOGS, True
+        return own, False
+
+    def log_lines(self, pattern):
+        key = (self.path, pattern)
+        if key in _LOG_CACHE:
+            return _LOG_CACHE[key]
+        rx = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\S* " + pattern)
+        out = []
+        for log in glob.glob(os.path.join(self.log_dir()[0], "main*.log")):
+            try:
+                with open(log, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if line[:2] == "20":
+                            m = rx.search(line)
+                            if m:
+                                out.append((datetime.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S"), m))
+            except OSError:
+                pass
+        out.sort(key=lambda x: x[0])
+        _LOG_CACHE[key] = out
+        return out
+
+    def real_inits(self):
+        """(time, account, org) of every LocalSessionManager init, minus Desktop's transitional lines: at a sign-in
+        change it logs the OLD account with the NEW org a moment before the new account's own line."""
+        # Two sources, merged: the init line (no path: only usable when the log dir is this profile's own) and the
+        # "Loaded N persisted sessions from <profile>/claude-code-sessions/<acct>/<org>" line (path-bearing: usable
+        # even in a shared log). Both show the transitional state, so the same filter applies to both.
+        inits = []
+        if not self.log_dir()[1]:
+            inits += [(t, m.group(2), m.group(3)) for t, m in self.log_lines(
+                r".*\[LocalSessionManager\] Initialization succeeded .{0,4}accountId=(" + UUID + r"), orgId=(" + UUID + r")")]
+        mine = os.path.realpath(self.store()) + os.sep
+        for t, m in self.loaded_lines():
+            rp = os.path.realpath(m.group(3))
+            if rp.startswith(mine):
+                parts = rp[len(mine):].split(os.sep)
+                if len(parts) == 2 and all(re.fullmatch(UUID, x) for x in parts):
+                    inits.append((t, parts[0], parts[1]))
+        inits = sorted(set(inits))
+        out = []
+        for i, (t, a, o) in enumerate(inits):
+            nxt = next(((t2, a2, o2) for t2, a2, o2 in inits[i + 1:] if (t2, a2, o2) != (t, a, o)), None)
+            if nxt and nxt[1] != a and nxt[2] == o and (nxt[0] - t).total_seconds() <= 10:
+                continue
+            out.append((t, a, o))
+        return out
+
+    def loaded_lines(self):
+        return self.log_lines(r".*Loaded (\d+) persisted sessions from (.+?)\s*$")
+
+    def login_transitions(self):
+        if self.log_dir()[1] and self.path != os.path.realpath(DEFAULT_PROFILE):
+            return []                                        # shared macOS log: cannot tell whose transition it was
+        return [(t, m.group(2) == "true", m.group(4)) for t, m in self.log_lines(
+            r".*Login-state transition \(loggedOut: \w+ \S+ (\w+), uuid: (\S+) \S+ ([^)]+)\)")]
+
+    def login_events(self):
+        """(time, logged_in) for every sign-in/out signal, oldest first. Newer builds log `Login-state transition`;
+        older ones (seen: 1.9255.2 Linux arm64) only `claude.ai account active and logged in` / `User is logged out`
+        / `synthesizing logged-out`. Only the NEWEST event counts."""
+        ev = [(t, not out) for t, out, _ in self.login_transitions()]
+        ev += [(t, True) for t, _ in self.log_lines(r".*claude\.ai account active and logged in")]
+        ev += [(t, False) for t, _ in self.log_lines(
+            r".*(\[account\] User is logged out|User logged out during IPC wait|synthesizing logged-out)")]
+        ev.sort(key=lambda x: x[0])                 # stable: same-second events keep their log order
+        return ev
+
+    def state(self):
+        cfg = self.config()
+        acct = cfg.get("lastKnownAccountUuid")
+        if not acct:                                # older builds never write it: use Desktop's own newest init
+            inits = self.real_inits()
+            acct = inits[-1][1] if inits else None
+        present, exp = self.session_cookie()
+        ev = self.login_events()
+        if present is None:
+            verdict = "unknown"
+        elif not present or (ev and not ev[-1][1]):
+            verdict = "signed-out"
+        elif exp and exp < now_utc():
+            verdict = "expired"
+        else:
+            verdict = "signed-in" if acct else "signed-out"
+        signed = acct if verdict in ("signed-in", "expired") else None
+        return {"account": signed, "last_account": acct, "verdict": verdict,
+                "cookie_expires": exp.strftime("%Y-%m-%d") if exp else None,
+                "active_org": self.org_for(signed) if signed else None}
+
+    def org_for(self, acct, reg=None, why=None):
+        """The org Desktop reads for this account in this profile: its newest real init line here; else the only org
+        dir it has here; else the account's only org known from ANY profile or the CLI (an account's org is the same
+        in every profile; several orgs = ambiguous = None)."""
+        why = why if why is not None else []
+        orgs = [o for _, a, o in self.real_inits() if a == acct]
+        if orgs:
+            why.append("this profile's log"); return orgs[-1]
+        here = [os.path.basename(d) for d in glob.glob(os.path.join(self.store(), acct, "*")) if os.path.isdir(d)]
+        if len(here) == 1:
+            why.append("its only org dir in this profile"); return here[0]
+        known = [o for o in ((reg or {}).get(acct) or {}).get("orgs", {})]
+        if len(known) == 1:
+            why.append("inferred: the account's only known org (from another profile / the CLI); run `verify` "
+                       "after the next launch")
+            return known[0]
+        if len(known) > 1:
+            why.append(f"ambiguous: {len(known)} orgs known for this account")
+        return None
+
+    def dirs(self, kind="code"):
+        return sorted(d for d in glob.glob(os.path.join(self.store(kind), "*", "*"))
+                      if os.path.isdir(d) and os.path.basename(os.path.dirname(d)) != "skills-plugin")
+
+
+def discover():
+    """Every Desktop profile on this host we can find. Returns realpaths (default first)."""
+    found = []
+    def add(p):
+        if p and os.path.isdir(p) and os.path.exists(os.path.join(p, "config.json")) and not p.endswith("-3p"):
+            rp = os.path.realpath(p)
+            if rp not in found:
+                found.append(rp)
+    add(DEFAULT_PROFILE)
+    for d in sorted(glob.glob(os.path.join(INST, "*"))):
+        if not os.path.basename(d).startswith("_"):
+            add(d)
+    if not SANDBOX:
+        for pid in _pids():
+            a = _argv(pid)
+            if a and (_is_desktop(a) or "claude-desktop" in a[0]):
+                add(_udd(pid, a))
+        for f in glob.glob(os.path.join(HOME, ".local", "share", "applications", "*.desktop")) + \
+                glob.glob("/usr/share/applications/*.desktop"):
+            try:
+                for m in re.finditer(r"--user-data-dir=(\"[^\"]+\"|'[^']+'|\S+)", open(f, encoding="utf-8", errors="replace").read()):
+                    add(os.path.expanduser(m.group(1).strip("'\"").replace("$HOME", HOME)))
+            except OSError:
+                pass
+    for p in _remembered() + [x for x in os.environ.get("CCD_REHOME_PROFILES", "").split(os.pathsep) if x]:
+        add(os.path.expanduser(p))
+    return found
+
+
+# ---------------- account registry ----------------
+EMAIL_RX = re.compile(rb"(" + UUID.encode() + rb").{0,40}?email_address.{1,6}?"
+                      rb"([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})", re.S)
+
+
+def refresh_registry(paths):
+    """account uuid -> {email, orgs}. A profile only holds the email it is signed in to NOW, so every pairing ever
+    seen is kept: an old account stays resolvable after sign-out."""
+    try:
+        raw = load(REGISTRY)
+    except (OSError, ValueError):
+        raw = {}
+    if raw.get("version") == 2:
+        reg = raw["accounts"]
+    else:                     # v1 kept org links learned from Desktop's transitional log lines: keep emails only
+        reg = {u: {"email": e.get("email"), "orgs": {}, "sources": e.get("sources", [])}
+               for u, e in raw.items() if isinstance(e, dict)}
+    stamp = now_utc().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def note(uuid, email, src, org=None, org_name=None):
+        e = reg.setdefault(uuid, {"email": None, "orgs": {}, "sources": []})
+        e["email"] = email or e.get("email")
+        if org:
+            e["orgs"][org] = org_name or e["orgs"].get(org)
+        if src not in e["sources"]:
+            e["sources"].append(src)
+        e["last_seen"] = stamp
+
+    for path in paths:
+        p = Profile(path)
+        for f in glob.glob(os.path.join(p.path, "IndexedDB", "**", "*"), recursive=True) + \
+                glob.glob(os.path.join(p.path, "Local Storage", "leveldb", "*")):
+            try:
+                if os.path.isfile(f) and os.path.getsize(f) < 64 << 20:
+                    with open(f, "rb") as fh:
+                        for m in EMAIL_RX.finditer(fh.read()):
+                            note(m.group(1).decode(), m.group(2).decode(), f"profile:{p.name}")
+            except OSError:
+                pass
+        for _, a, o in p.real_inits():
+            note(a, None, f"log:{p.name}", o)
+    for cj in (os.path.join(HOME, ".claude.json"), os.path.join(HOME, ".claude", ".claude.json")):
+        try:
+            oa = load(cj).get("oauthAccount") or {}
+            if oa.get("accountUuid"):
+                note(oa["accountUuid"], oa.get("emailAddress"), "cli:~/.claude.json",
+                     oa.get("organizationUuid"), oa.get("organizationName"))
+        except (OSError, ValueError):
+            pass
+    if not DRY:
+        write_json(REGISTRY, {"version": 2, "accounts": reg}, indent=2)
+    return reg
+
+
+def email(reg, uuid):
+    return (reg.get(uuid) or {}).get("email") or (uuid[:8] + "… (email unknown)" if uuid else "-")
+
+
+def resolve_account(reg, p, spec):
+    """email, full uuid, or uuid prefix -> uuid. Searches the registry and the profile's own account dirs."""
+    s = spec.strip().lower()
+    cands = set(reg) | {os.path.basename(a) for k in STORES for a in glob.glob(os.path.join(p.store(k), "*"))
+                        if os.path.isdir(a) and re.fullmatch(UUID, os.path.basename(a))}
+    if "@" in s:
+        hit = [u for u in cands if ((reg.get(u) or {}).get("email") or "").lower() == s]
+    else:
+        hit = [u for u in cands if u.lower().startswith(s)]
+    if len(hit) != 1:
+        known = ", ".join(f"{email(reg, u)} ({u[:8]})" for u in sorted(cands)) or "none"
+        die(f"account {spec!r} matches {len(hit)} known accounts. Known: {known}. "
+            f"(An account becomes known once any profile has signed in to it, or the CLI has.)")
+    return hit[0]
+
+
+# ---------------- validation ----------------
+def validate(dirs):
+    """Check every structure a move would read or write against the documented formats (mechanics.md §0, §1, §5).
+    Returns (errors, drift):
+      errors = the format is broken or changed in a way the tool cannot handle  -> always refuse
+      drift  = something new or unexpected the tool would carry blindly or leave behind -> refuse a real run unless
+               --accept-drift; a dry run shows it either way."""
+    errors, drift = [], []
+    cowork_userdata = []
+    def typ(rec, k, t, where):
+        if k in rec and rec[k] is not None and not isinstance(rec[k], t):
+            errors.append(f"{where}: field {k!r} is {type(rec[k]).__name__}, expected {t if isinstance(t, type) else t}")
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        store = "cowork" if os.path.basename(os.path.dirname(os.path.dirname(d))) == STORES["cowork"] else "code"
+        for e in sorted(os.listdir(d)):
+            f = os.path.join(d, e)
+            cls = entry_class(store, e)
+            if cls == "unknown":
+                drift.append(f"{short(f)}: unknown entry {'(folder)' if os.path.isdir(f) else '(file)'}: it would be "
+                             f"LEFT BEHIND by a move")
+            elif cls == "userdata":
+                if has_content(f):
+                    cowork_userdata.append(f)
+            elif e == "waiting-input" and store == "code":
+                if os.path.isdir(f) and os.listdir(f):
+                    drift.append(f"{short(f)}: holds {len(os.listdir(f))} pending input snapshot(s); their format is not "
+                                 f"known yet, so they would be LEFT BEHIND")
+            elif store == "code" and e.startswith("local_") and e.endswith(".json"):
+                try:
+                    rec = load(f)
+                except (OSError, ValueError) as x:
+                    errors.append(f"{short(f)}: not readable JSON ({x})"); continue
+                if not isinstance(rec, dict):
+                    errors.append(f"{short(f)}: record is {type(rec).__name__}, expected an object"); continue
+                if rec.get("sessionId") != e[:-5]:
+                    errors.append(f"{short(f)}: sessionId {rec.get('sessionId')!r} does not match the file name")
+                for k, t in (("cliSessionId", str), ("title", str), ("model", str), ("cwd", str),
+                             ("lastActivityAt", (int, float)), ("createdAt", (int, float)),
+                             ("sessionSettings", dict), ("priorCliSessionIds", list), ("armedWorkAtQuit", dict)):
+                    typ(rec, k, t, short(f))
+                new = sorted(k for k in rec if k not in KNOWN_KEYS)
+                if new:
+                    drift.append(f"{short(f)}: unknown record field(s) {', '.join(new)}: they would be COPIED as-is "
+                                 f"(correct only if they are not account-bound)")
+            elif e.startswith("deleted_"):
+                if os.path.isdir(f):
+                    errors.append(f"{short(f)}: tombstone is a folder, expected a small file")
+                elif not re.fullmatch(r"\s*\d+\s*", open(f, encoding="utf-8", errors="replace").read(64) or "0"):
+                    drift.append(f"{short(f)}: tombstone content is not a timestamp (format changed?)")
+            elif e == "backlog":
+                b = os.path.join(f, "tasks.json")
+                extra = [x for x in os.listdir(f) if x != "tasks.json"] if os.path.isdir(f) else ["(not a folder)"]
+                if extra:
+                    drift.append(f"{short(f)}: unexpected content {extra}: it would be LEFT BEHIND")
+                if os.path.exists(b):
+                    try:
+                        bj = load(b)
+                        items = bj.get("items") if isinstance(bj, dict) else None
+                        if not isinstance(items, list) or any(not isinstance(i, dict) or "id" not in i for i in items):
+                            errors.append(f"{short(b)}: expected {{'items': [{{'id': ...}}, ...]}}")
+                    except (OSError, ValueError) as x:
+                        errors.append(f"{short(b)}: not readable JSON ({x})")
+            elif e == "scheduled-tasks.json":
+                try:
+                    sj = load(f)
+                    if not isinstance(sj, dict) or not isinstance(sj.get("scheduledTasks", []), list):
+                        errors.append(f"{short(f)}: expected {{'scheduledTasks': [...]}}")
+                except (OSError, ValueError) as x:
+                    errors.append(f"{short(f)}: not readable JSON ({x})")
+    validate.cowork_userdata = cowork_userdata
+    return errors, drift
+
+
+def desktop_version(paths):
+    """Desktop version: the newest `Starting app { appVersion: 'X'` in each profile's log (every platform and build
+    logs it), else config.json's updaterLastSeenVersion (not written by every build). Newest wins."""
+    vs = []
+    for x in paths:
+        try:
+            ld = Profile(x).log_dir()[0]
+        except SystemExit:
+            ld = None
+        best = None
+        for log in glob.glob(os.path.join(ld, "main*.log")) if ld else []:
+            try:
+                with open(log, encoding="utf-8", errors="replace") as f:
+                    stamp = None
+                    for line in f:
+                        if "Starting app {" in line:
+                            stamp = line[:19]
+                        elif stamp:
+                            m = re.search(r"appVersion:\s*'([^']+)'", line)
+                            if m:
+                                if not best or stamp > best[0]:
+                                    best = (stamp, m.group(1))
+                                stamp = None
+                            elif line.startswith("20") or line.strip() == "}":
+                                stamp = None
+            except OSError:
+                pass
+        if best:
+            vs.append(best[1]); continue
+        try:
+            c = load(os.path.join(x, "config.json"))
+            v = c.get("updaterLastSeenVersion") or (c.get("version_first_launch") or {}).get("version")
+            if v:
+                vs.append(v)
+        except (OSError, ValueError):
+            pass
+    return max(vs, key=lambda v: [int(n) if n.isdigit() else 0 for n in re.split(r"[.-]", v)]) if vs else None
+
+
+def os_version():
+    """A non-identifying OS description: family and release only (no host name, kernel build or user)."""
+    if MAC:
+        return "macOS " + (platform.mac_ver()[0] or "?")
+    if WIN:
+        return "Windows " + platform.release()
+    try:
+        r = platform.freedesktop_os_release()
+        return f"{r.get('NAME', 'Linux')} {r.get('VERSION_ID', '')}".strip()
+    except (OSError, AttributeError):
+        return "Linux"
+
+
+def tested():
+    try:
+        return load(TESTED_FILE).get("tested", [])
+    except (OSError, ValueError):
+        return []
+
+
+def compat_note(dv):
+    """None if this tool version + Desktop version + OS family is in tested.json, else a one-line warning."""
+    fam = "macOS" if MAC else "Windows" if WIN else "Linux"
+    rows = tested()
+    minor = lambda v: ".".join(str(v or "").split(".")[:2])        # 0.4.x patch releases share test results
+    if any(r.get("desktop") == dv and r.get("os_family") == fam and minor(r.get("tool")) == minor(VERSION) for r in rows):
+        return None
+    known = sorted({f"Desktop {r.get('desktop')} on {r.get('os_family')} with tool {minor(r.get('tool'))}" for r in rows}) or ["none"]
+    return (f"untested combination: tool {VERSION}, Desktop {dv or '?'}, {fam} (tested: {', '.join(known)}). Use "
+            f"--dry-run first and `verify` after; if it works, `ccd-rehome report` gives an entry to submit")
+
+
+# ---------------- in use ----------------
+def in_use_elsewhere(recs):
+    if SANDBOX:
+        return []
+    ids = {}
+    for r in recs:
+        for c in [r.get("cliSessionId")] + list(r.get("priorCliSessionIds") or []):
+            if c:
+                ids[c] = r.get("title") or r.get("sessionId")
+    paths = {os.path.realpath(t): ids[c] for c in ids for t in [transcript(c)] if t}
+    busy = set()
+    if not os.path.isdir("/proc") and paths:                 # macOS (and anything with lsof): one call
+        try:
+            out = subprocess.run(["lsof", "-Fpn", "--", *paths], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=60).stdout
+            pid = None
+            for line in out.splitlines():
+                if line[:1] == "p":
+                    pid = line[1:]
+                elif line[:1] == "n" and line[1:] in paths:
+                    busy.add(f"{paths[line[1:]]!r} (pid {pid}, open file)")
+        except (OSError, subprocess.SubprocessError):
+            say("  note: could not check for conversations open in other processes on this OS (no lsof)")
+    for pid in _pids():
+        a = _argv(pid)
+        busy.update(f"{ids[x]!r} (pid {pid})" for x in a if x in ids)
+        busy.update(f"{ids[x.split('=', 1)[1]]!r} (pid {pid})" for x in a
+                    if x.startswith(("--resume=", "--session-id=")) and x.split("=", 1)[1] in ids)
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                t = os.readlink(f"/proc/{pid}/fd/{fd}")
+                if t in paths:
+                    busy.add(f"{paths[t]!r} (pid {pid}, open file)")
+        except OSError:
+            pass
+    return sorted(busy)
+
+
+# ---------------- archive / rollback ----------------
+def archive(p, kind, dirs, plan):
+    def mk():
+        ts = now_utc().strftime("%Y%m%dT%H%M%SZ")
+        return ts, os.path.join(ARCHIVE, p.key, f"{ts}-{kind}")
+    ts, root = mk()
+    while os.path.exists(root):
+        time.sleep(1); ts, root = mk()
+    name = os.path.basename(root)
+    if DRY:
+        say(f"  [dry-run] archive {len(dirs)} dir(s) to {root}"); return name
+    os.makedirs(root, 0o700)
+    for i, d in enumerate(dirs):
+        if os.path.isdir(d):
+            shutil.copytree(d, os.path.join(root, str(i)), symlinks=True)
+    write_json(os.path.join(root, "manifest.json"), {"profile": p.name, "profile_path": p.path, "kind": kind,
+               "created_utc": ts, "dirs": {str(i): d for i, d in enumerate(dirs)},
+               "existed": {d: os.path.isdir(d) for d in dirs},
+               "parent_existed": {d: os.path.isdir(os.path.dirname(d)) for d in dirs}, "plan": plan}, 2)
+    open(os.path.join(root, "COMPLETE"), "w").close()
+    return name
+
+
+def archives(p):
+    return sorted(os.path.basename(a) for a in glob.glob(os.path.join(ARCHIVE, p.key, "*")))
+
+
+def rollback(p, name):
+    if not ARCH_RE.fullmatch(name or ""):
+        die(f"not an archive name: {name!r} (see `ccd-rehome status {p.name}`)")
+    p.require_quit()
+    root = os.path.join(ARCHIVE, p.key, name)
+    if not os.path.exists(os.path.join(root, "COMPLETE")):
+        die(f"no complete archive at {root}")
+    m = load(os.path.join(root, "manifest.json"))
+    if os.path.realpath(m.get("profile_path", "")) != p.path:
+        die(f"archive {name} belongs to {m.get('profile_path')}, not {p.path}")
+    safety = archive(p, "pre-rollback", list(m["dirs"].values()), {"rollback_of": name})
+
+    def files(base):
+        return {os.path.relpath(os.path.join(dp, f), base) for dp, _, fs in os.walk(base) for f in fs} \
+            if os.path.isdir(base) else set()
+    for i, d in m["dirs"].items():
+        snap = os.path.join(root, i)
+        s, c = files(snap), files(d)
+        for extra in sorted(c - s):
+            say(f"  remove {extra} from {short(d)} (kept in {safety})"); remove(os.path.join(d, extra))
+        for f in sorted(s):
+            src, dst = os.path.join(snap, f), os.path.join(d, f)
+            if os.path.isfile(dst) and open(src, "rb").read() == open(dst, "rb").read():
+                continue
+            say(f"  restore {f} -> {short(d)}")
+            if not DRY:
+                os.makedirs(os.path.dirname(dst), 0o700, exist_ok=True); shutil.copy2(src, dst)
+        if os.path.isdir(d) and not DRY:          # empty dirs the undone move created (moved Cowork dirs, targets)
+            for dp, dn, fn in os.walk(d, topdown=False):
+                rel = os.path.relpath(dp, d)
+                gone = not m["existed"].get(d) if rel == "." else not os.path.isdir(os.path.join(snap, rel))
+                if not os.listdir(dp) and gone:
+                    os.rmdir(dp)
+            par = os.path.dirname(d)
+            if not os.path.isdir(d) and m.get("parent_existed", {}).get(d) is False and os.path.isdir(par) \
+                    and not os.listdir(par):
+                os.rmdir(par)
+    say(f"rolled back {name}. Safety archive of the state before rollback: {safety}")
+
+
+# ---------------- inventory ----------------
+def inventory(p, reg, kind="code"):
+    """Every record in a store: [(dir, account, org, path, rec|None)]."""
+    out = []
+    for d in p.dirs(kind):
+        a, o = os.path.relpath(d, p.store(kind)).split(os.sep)
+        if kind == "code":
+            items = records(d)
+        else:                                   # Cowork: local_* files or dirs; rpm/ is a plugin cache
+            items = sorted(x for x in glob.glob(os.path.join(d, "local_*")))
+        for r in items:
+            rec = None
+            if r.endswith(".json"):
+                try:
+                    rec = load(r)
+                except (OSError, ValueError):
+                    rec = None
+            out.append((d, a, o, r, rec))
+    return out
+
+
+def plan_target(p, reg, to=None, to_org=None):
+    """(account, org, dst, blocker, note). Prints nothing: it also runs inside --json reports."""
+    st = p.state()
+    if to is None:
+        if st["verdict"] != "signed-in":
+            return None, None, None, (f"not signed in ({st['verdict']}). Launch it, sign in to the account you want, "
+                                      f"open the Code tab once, quit, re-run. (Or name a target: --to EMAIL)"), None
+        acct = st["account"]
+    else:
+        acct = resolve_account(reg, p, to)
+    why = []
+    org = to_org or p.org_for(acct, reg, why)
+    if not org:
+        return acct, None, None, (f"no org known for {email(reg, acct)} in this profile"
+                                  f"{' (' + why[-1] + ')' if why else ''}. Open the Code tab once while signed in to "
+                                  f"it (then quit and re-run), or pass --to-org ORG_UUID"), None
+    if not re.fullmatch(UUID, org):
+        die(f"--to-org must be a full org uuid, got {org!r}")
+    notes = [f"target org {org[:8]}: {why[-1]}"] if why and why[-1].startswith("inferred") else []
+    if acct != st["account"]:
+        who = f", {email(reg, st['account'])}" if st["account"] else ""
+        notes.append(f"{email(reg, acct)} is not the signed-in account ({st['verdict']}{who}): Desktop will show "
+                     f"these sessions once this profile is signed in to {email(reg, acct)}")
+    return acct, org, os.path.join(p.store(), acct, org), None, "; ".join(notes) or None
+
+
+# ---------------- move ----------------
+def merge_items(src_f, dst_f, key, label, keep=None):
+    """Union two {key: [items with 'id']} JSON files into dst (dedup by id). keep(item) filters what is copied."""
+    a = load(src_f)
+    b = load(dst_f) if os.path.exists(dst_f) else {**{k: v for k, v in a.items() if k != key}, key: []}
+    ident = lambda i: i.get("id") if isinstance(i, dict) and "id" in i else json.dumps(i, sort_keys=True)
+    have = {ident(i) for i in b.get(key) or []}
+    new = [i for i in a.get(key) or [] if ident(i) not in have and (keep is None or keep(i))]
+    if new:
+        b[key] = (b.get(key) or []) + new
+        say(f"  merge {len(new)} {label}")
+        write_json(dst_f, b)
+    return len(new)
+
+
+def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_if_nothing=False,
+         accept_drift=False):
+    p.require_quit()
+    acct, org, dst, blocker, note = plan_target(p, reg, to, to_org)
+    if blocker:
+        die(f"{p.name}: {blocker}")
+    frm_ids = {resolve_account(reg, p, f) for f in frm} if frm else None
+    ids = [o[6:] if o.startswith("local_") else o for o in (only or [])]
+
+    def wanted(a, path):
+        if frm_ids is not None and a not in frm_ids:
+            return False
+        return not ids or any(sid_of(path)[6:].startswith(i) for i in ids)
+
+    picks = {}
+    for kind in (("code", "cowork") if cowork else ("code",)):
+        target = os.path.join(p.store(kind), acct, org)
+        for d, a, o, r, rec in inventory(p, reg, kind):
+            if d == target or not wanted(a, r):
+                continue
+            if kind == "code":
+                if rec is None:
+                    die(f"cannot read {r}; nothing was changed")
+                if rec.get("sessionId") != sid_of(r):
+                    die(f"{r}: sessionId does not match its file name; nothing was changed")
+            picks.setdefault(kind, []).append((d, a, r, rec))
+    if ids:
+        got = [sid_of(r) for k in picks for _, _, r, _ in picks[k]]
+        bad = [i for i in ids if not any(g[6:].startswith(i) for g in got)]
+        if bad:
+            die(f"--only matched no session outside {email(reg, acct)} for {bad} "
+                f"(ids: `ccd-rehome sessions {p.name}`)")
+    srcs = {k: sorted({d for d, _, _, _ in v}) for k, v in picks.items()}
+    for k, ds in srcs.items():                           # validate side files before writing anything
+        for d in ds + [os.path.join(p.store(k), acct, org)]:
+            for f in ("backlog/tasks.json", "scheduled-tasks.json"):
+                if os.path.exists(os.path.join(d, f)):
+                    try:
+                        load(os.path.join(d, f))
+                    except ValueError as e:
+                        die(f"cannot parse {os.path.join(d, f)}: {e}; nothing was changed")
+    # decide skips BEFORE archiving: a target copy that is newer wins (code), an existing item wins (cowork)
+    skips = []
+    for kind, items in picks.items():
+        target = os.path.join(p.store(kind), acct, org)
+        keep = []
+        for it in items:
+            d, a, r, rec = it
+            here = os.path.join(target, os.path.basename(r))
+            newer = False
+            if kind == "code" and os.path.exists(here):
+                try:
+                    newer = load(here).get("lastActivityAt", 0) > rec.get("lastActivityAt", 0)
+                except (OSError, ValueError):
+                    newer = False
+            elif kind == "cowork":
+                newer = os.path.lexists(here)
+            (skips if newer else keep).append((kind, it) if newer else it)
+        picks[kind] = keep
+    picks = {k: v for k, v in picks.items() if v}
+    for kind, (d, a, r, rec) in skips:
+        say(f"  SKIP {(rec or {}).get('title') or os.path.basename(r)!r}: the copy already in {email(reg, acct)} is "
+            f"newer (both kept)")
+    n = sum(len(v) for v in picks.values())
+    if n:
+        touched = sorted({d for v in picks.values() for d, _, _, _ in v} |
+                         {os.path.join(p.store(k), acct, org) for k in picks})
+        errors, drift = validate(touched)
+        if cowork:
+            src_cw = [d for d in p.dirs("cowork") if d != os.path.join(p.store("cowork"), acct, org)]
+            validate(src_cw)
+            for f in validate.cowork_userdata:
+                errors.append(f"{short(f)}: Cowork user data (spaces / agents / settings, Desktop 4.x). Moving Cowork "
+                              f"sessions without it would split them from their spaces, and how they link is not known "
+                              f"yet. Move Code sessions only (drop --include-cowork), or teach the tool (SKILL.md)")
+        cn = compat_note(desktop_version([p.path]))
+        if errors or drift or cn:
+            say(f"  validation of {len(touched)} folder(s) this move touches:")
+            for x in errors:
+                say(f"    ERROR  {x}")
+            for x in drift:
+                say(f"    DRIFT  {x}")
+            if cn:
+                say(f"    NOTE   {cn}")
+        if errors:
+            die("refusing: the files are not in the format this tool knows; nothing was changed. "
+                "See SKILL.md \"Maintaining this skill\" (or report it: CONTRIBUTING.md)")
+        if drift and not accept_drift and not DRY:
+            die("refusing: Desktop stores something this tool does not know yet (DRIFT above); nothing was changed.\n"
+                "  Review it with --dry-run. If you are sure it is safe, re-run with --accept-drift. Either way, please "
+                "teach the tool about it (SKILL.md \"Maintaining this skill\") so the next run is clean.")
+    if not n:
+        if not quiet_if_nothing:
+            say(f"{p.name}: nothing to move into {email(reg, acct)}"
+                f"{' (from ' + ', '.join(email(reg, f) for f in frm_ids) + ')' if frm_ids else ''}.")
+        return None
+    busy = in_use_elsewhere([rec for _, _, _, rec in picks.get("code", []) if rec])
+    if busy:
+        die(f"these conversations are open in another process: {busy}")
+    say(f"{p.name}: {n} session(s) -> {email(reg, acct)} / org {org[:8]}  ({short(dst)})")
+    if note:
+        say(f"  note: {note}")
+    dirs = sorted({d for v in srcs.values() for d in v} | {os.path.join(p.store(k), acct, org) for k in picks})
+    arch = archive(p, "move", dirs, {"to": acct, "org": org, "from": sorted(frm_ids or []), "only": ids,
+                                     "items": {k: [os.path.basename(r) for _, _, r, _ in v] for k, v in picks.items()}})
+    moved, skipped, moved_sids = 0, len(skips), set()
+    scratch = os.path.join(p.path, "scratch-workspaces")
+    for kind, items in picks.items():
+        target = os.path.join(p.store(kind), acct, org)
+        if not DRY:
+            os.makedirs(target, 0o700, exist_ok=True)
+        for d, a, r, rec in items:
+            here = os.path.join(target, os.path.basename(r))
+            if kind == "code":
+                out = {k: v for k, v in rec.items() if k not in TRANSIENT and k not in ACCOUNT_BOUND}
+                if LOCAL_MODEL_RE.match(out.get("model") or ""):
+                    out["model"] = FALLBACK_MODEL
+                write_json(here, out); remove(r)
+                moved_sids.add(rec["sessionId"])
+                extra = []
+                if (rec.get("armedWorkAtQuit") or {}).get("backgroundTaskCount"):
+                    extra.append(f"{rec['armedWorkAtQuit']['backgroundTaskCount']} queued background task(s) kept")
+                if (rec.get("cwd") or "").startswith(scratch + os.sep) and f"{os.sep}{acct}{os.sep}" not in rec["cwd"]:
+                    extra.append("cwd is in another account's scratch workspace (left in place, still works)")
+                t = transcript(rec.get("cliSessionId"))
+                say(f"  moved {(rec.get('title') or '')[:44]!r:46} from {email(reg, a)[:26]:26}"
+                    f" transcript {'ok' if t else 'MISSING'}" + (f"  [{'; '.join(extra)}]" if extra else ""))
+            else:
+                if DRY:
+                    say(f"  [dry-run] move cowork {os.path.basename(r)}")
+                else:
+                    shutil.move(r, here)
+                say(f"  moved cowork item {os.path.basename(r)} from {email(reg, a)[:26]}")
+            moved += 1
+        for d in srcs[kind]:                           # per-org side files
+            for tomb in glob.glob(os.path.join(d, "deleted_*")):
+                if not os.path.exists(os.path.join(target, os.path.basename(tomb))):
+                    say(f"  copy tombstone {os.path.basename(tomb)}")
+                    if not DRY:
+                        shutil.copy2(tomb, target)
+            b = os.path.join(d, "backlog", "tasks.json")
+            if os.path.exists(b):    # partial move: only suggestions that came from the moved sessions
+                keep = None if not ids else (lambda i: i.get("originSessionId") in moved_sids)
+                merge_items(b, os.path.join(target, "backlog", "tasks.json"), "items", "task suggestion(s)", keep)
+            s = os.path.join(d, "scheduled-tasks.json")
+            if os.path.exists(s) and load(s).get("scheduledTasks") and not ids:
+                merge_items(s, os.path.join(target, "scheduled-tasks.json"), "scheduledTasks", "scheduled task(s)")
+    say(f"{'dry run complete: nothing was written. The real run would do the above' if DRY else 'done'}: "
+        f"{moved} moved, {skipped} skipped. Archive: {arch}{' (not created)' if DRY else ''}")
+    say(f"undo:  ccd-rehome rollback {p.name} {arch}")
+    return arch
+
+
+# ---------------- CLI <-> Desktop ----------------
+def mangle(path):
+    """Claude Code's project-dir name for a cwd. A copy of session-transporter's canonical scripts/mangle.py
+    (derived from the CLI); the self-test cross-checks the two whenever both skills are installed."""
+    u16 = path.encode("utf-16-le")
+    units = [u16[i] | (u16[i + 1] << 8) for i in range(0, len(u16), 2)]
+    t = "".join(chr(c) if (48 <= c <= 57 or 65 <= c <= 90 or 97 <= c <= 122) else "-" for c in units)
+    if len(t) <= 200:
+        return t
+    h = 0
+    for c in units:
+        h = (h * 31 + c) & 0xFFFFFFFF
+    h = h - 0x100000000 if h >= 0x80000000 else h
+    n, d, out = abs(h), "0123456789abcdefghijklmnopqrstuvwxyz", ""
+    while n:
+        out, n = d[n % 36] + out, n // 36
+    return t[:200] + "-" + (out or "0")
+
+
+def _iso_ms(ts):
+    try:
+        return int(datetime.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def transcript_info(path):
+    """Streamed facts about a conversation file: cwd candidates, title, where it started, first/last times."""
+    cwds, title, ai, first_prompt, started, t0, t1 = {}, None, None, None, None, None, None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if d.get("cwd"):
+                cwds[d["cwd"]] = cwds.get(d["cwd"], 0) + 1
+                last_cwd = d["cwd"]
+            if d.get("entrypoint") and not started:
+                started = "desktop" if d["entrypoint"] == "claude-desktop" else "cli"
+            ms = _iso_ms(d.get("timestamp"))
+            if ms:
+                t0 = t0 or ms; t1 = ms
+            if d.get("type") == "custom-title" and d.get("customTitle"):
+                title = d["customTitle"]
+            elif d.get("type") == "ai-title" and d.get("aiTitle"):
+                ai = d["aiTitle"]
+            elif d.get("type") == "user" and first_prompt is None:
+                c = (d.get("message") or {}).get("content")
+                c = c if isinstance(c, str) else next((x.get("text") for x in c or [] if isinstance(x, dict)
+                                                       and x.get("type") == "text"), None) if isinstance(c, list) else None
+                if c:
+                    first_prompt = " ".join(c.split())[:60]
+    key = os.path.basename(os.path.dirname(path))
+    order = sorted(cwds, key=lambda c: (c != (locals().get("last_cwd")), -cwds[c]))
+    cwd = next((c for c in order if mangle(os.path.realpath(c)) == key or mangle(c) == key), None)
+    return {"cli": os.path.basename(path)[:-6], "key": key, "cwd": cwd, "cwd_exists": bool(cwd and os.path.isdir(cwd)),
+            "title": title or ai or first_prompt, "custom_title": bool(title), "started_in": started or "unknown",
+            "first_ms": t0, "last_ms": t1 or int(os.path.getmtime(path) * 1000),
+            "size_mb": round(os.path.getsize(path) / 2 ** 20, 1), "path": path}
+
+
+def registered_clis(paths):
+    out = set()
+    for x in paths:
+        for kind in STORES:
+            for f in glob.glob(os.path.join(x, STORES[kind], "*", "*", "local_*.json")):
+                try:
+                    d = load(f)
+                    out.add(d.get("cliSessionId")); out.update(d.get("priorCliSessionIds") or [])
+                except (OSError, ValueError, AttributeError):
+                    pass
+    return out
+
+
+def cli_sessions(found, as_json):
+    known = registered_clis(found)
+    rows = [transcript_info(t) for t in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl"))
+            if os.path.basename(t)[:-6] not in known and re.fullmatch(UUID, os.path.basename(t)[:-6])]
+    rows.sort(key=lambda r: r["last_ms"], reverse=True)
+    if as_json:
+        print(json.dumps([{k: v for k, v in r.items() if k != "path"} for r in rows], indent=2, ensure_ascii=False))
+        return
+    say(f"{len(rows)} conversation(s) under {short(PROJECTS)} that no Desktop profile lists:")
+    for r in rows:
+        when = datetime.datetime.fromtimestamp(r["last_ms"] / 1000).strftime("%Y-%m-%d %H:%M")
+        say(f"  {r['cli'][:8]}  {when}  {r['size_mb']:>7} MB  started in {r['started_in']:7}  "
+            f"{(r['title'] or '')[:40]:40}  {short(r['cwd']) if r['cwd'] else '(folder unknown)'}"
+            + ("" if r["cwd_exists"] else "  [folder missing]"))
+    say("  give one a Desktop record:  ccd-rehome register PROFILE --cli-session-id ID")
+
+
+def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_drift=False):
+    hits = [t for t in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")) if os.path.basename(t).startswith(cli or "-")]
+    if len(hits) != 1:
+        die(f"--cli-session-id {cli!r} matches {len(hits)} conversations (list them: ccd-rehome cli-sessions)")
+    info = transcript_info(hits[0])
+    if cwd:
+        cwd = os.path.realpath(os.path.expanduser(cwd))
+        if mangle(cwd) != info["key"]:
+            die(f"refusing: the CLI would not find this conversation from {cwd}: it is filed under {info['key']}, "
+                f"and that folder's key is {mangle(cwd)}. (Moving a conversation to another folder is "
+                f"session-transporter's job.)")
+    else:
+        cwd = info["cwd"]
+        if not cwd:
+            die(f"cannot tell which folder this conversation runs in (key {info['key']}); pass --cwd DIR")
+    if not os.path.isdir(cwd):
+        die(f"refusing: the conversation's folder {cwd} does not exist on this machine; recreate it (or move the "
+            f"conversation with session-transporter), then re-run")
+    now_ms = int(time.time() * 1000)
+    rec = {"sessionId": f"local_{__import__('uuid').uuid4()}", "cliSessionId": info["cli"], "cwd": cwd,
+           "originCwd": cwd, "createdAt": info["first_ms"] or now_ms, "lastActivityAt": info["last_ms"] or now_ms,
+           "lastFocusedAt": info["last_ms"] or now_ms, "isArchived": False,
+           "title": title or info["title"] or f"CLI session {info['cli'][:8]}", "titleSource": "custom",
+           "permissionMode": "default"}
+    # Restore what Desktop knew about this conversation (effort, model, permissions, UltraCode, title, ...) from the
+    # newest archived copy of its record (left by unregister / move / adopt), so CLI -> Desktop after
+    # Desktop -> CLI loses nothing.
+    prior = None
+    for a_ in reversed(archives(p)):
+        for f in glob.glob(os.path.join(ARCHIVE, p.key, a_, "*", "local_*.json")):
+            try:
+                d = load(f)
+            except (OSError, ValueError):
+                continue
+            if d.get("cliSessionId") == info["cli"]:
+                prior = (a_, d); break
+        if prior:
+            break
+    if prior:
+        keep = {k: v for k, v in prior[1].items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+        keep.update(cwd=cwd, originCwd=cwd, lastActivityAt=max(keep.get("lastActivityAt") or 0, rec["lastActivityAt"]))
+        if title:
+            keep["title"] = title
+        rec = keep
+        say(f"  restored this session's Desktop settings from archive {prior[0]} (effort {rec.get('effort')}, "
+            f"title {rec.get('title')!r})")
+    busy = in_use_elsewhere([rec])
+    if busy:
+        die(f"refusing: that conversation is open in another process right now: {busy}. Close it there first.")
+    say(f"register {info['cli']} (started in {info['started_in']}, {info['size_mb']} MB, folder {short(cwd)})")
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "record.json")
+        with open(f, "w", encoding="utf-8") as fh:
+            json.dump({"format": RECORD_FORMAT, "tool": f"ccd-rehome {VERSION} register", "record": rec}, fh)
+        here = adopt(p, reg, f, to, to_org, None, None, None, accept_drift)
+    if here and not DRY:
+        say("  the transcript was not touched. Do NOT use Desktop's 'Recover CLI sessions' on it: that import "
+            "rewrites the file and strips its thinking content.")
+
+
+def move_to_profile(p, reg, ids, dest, to=None, to_org=None, accept_drift=False):
+    """Move session records to ANOTHER profile (user-data-dir) on this host. The conversation lives in the shared
+    ~/.claude/projects, so only the record moves: adopted into the destination first (validated, idempotent,
+    archived), removed from the source only after that succeeded (also archived). Its task suggestions follow."""
+    if not ids:
+        die("--to-profile needs --only ID ... (ids: `ccd-rehome sessions PROFILE`)")
+    q = Profile(dest)
+    if q.path == p.path:
+        die("--to-profile names the same profile; use move --to ACCOUNT for a move inside one profile")
+    p.require_quit(); q.require_quit()
+    for one in ids:
+        d, a, r, rec = _record(p, one)
+        body = {k: v for k, v in rec.items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+        say(f"{p.name} -> {q.name}: {rec.get('title')!r}")
+        src_arch = archive(p, "move", [d], {"to_profile": q.path, "record": os.path.basename(r)})
+        with tempfile.TemporaryDirectory() as td:
+            f = os.path.join(td, "record.json")
+            with open(f, "w", encoding="utf-8") as fh:
+                json.dump({"format": RECORD_FORMAT, "tool": f"ccd-rehome {VERSION} move", "record": body}, fh)
+            adopt(q, reg, f, to, to_org, None, None, None, accept_drift)
+        dst_dir = plan_target(q, reg, to, to_org)[2]
+        b = os.path.join(d, "backlog", "tasks.json")
+        if dst_dir and os.path.exists(b):
+            merge_items(b, os.path.join(dst_dir, "backlog", "tasks.json"), "items", "task suggestion(s)",
+                        lambda i: i.get("originSessionId") == rec.get("sessionId"))
+        remove(r)
+        say(f"  {'would remove' if DRY else 'removed'} it from {p.name}. Source archive: {src_arch}"
+            f"{' (not created)' if DRY else ''}   undo:  ccd-rehome rollback {p.name} {src_arch}  (and the adopt "
+            f"archive in {q.name})")
+
+
+def _record(p, only):
+    hits = [(d, a, r, rec) for d, a, o, r, rec in inventory(p, {}) if sid_of(r)[6:].startswith(only or "-")]
+    if len(hits) != 1 or hits[0][3] is None:
+        die(f"--only {only!r} matches {len(hits)} readable records (ids: `ccd-rehome sessions {p.name}`)")
+    return hits[0]
+
+
+def _vkey(v):
+    return [int(x) for x in re.findall(r"\d+", v or "")[:3]]
+
+
+def resume_cli(p, reg, only):
+    d, a, r, rec = _record(p, only)
+    cli, cwd = rec.get("cliSessionId"), rec.get("cwd")
+    if not transcript(cli):
+        die(f"the conversation {cli} is not on this machine (no {cli}.jsonl under {short(PROJECTS)})")
+    busy = in_use_elsewhere([rec])
+    if busy:
+        die(f"refusing: it is open right now ({', '.join(busy)}). Two writers fork the history: close it in "
+            f"Desktop (or the other terminal) first.")
+    q = (lambda x: '"' + x + '"') if WIN else (lambda x: "'" + x.replace("'", "'\\''") + "'")
+    say(f"{rec.get('title')!r}: continue it in the terminal with")
+    say(f"  cd {q(cwd)} && claude --resume {cli}")
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT") and not WIN:
+        # Measured: a `claude` started from a shell inside a Desktop session inherits Desktop's environment
+        # (CLAUDE_CODE_ENTRYPOINT=claude-desktop, the host session id, a messaging socket, ...), so its turns are
+        # stamped as Desktop turns and it runs as that session's child. Run it from a real terminal, or clean:
+        say(f"  WARNING: this is running inside a Desktop session ({os.environ['CLAUDE_CODE_ENTRYPOINT']}): a "
+            f"`claude` started from here inherits Desktop's environment. Run the command in a real terminal, or:")
+        say(f"  cd {q(cwd)} && env -i HOME=\"$HOME\" USER=\"$USER\" PATH=\"$PATH\" TERM=xterm-256color "
+            f"claude --resume {cli}")
+    # ---- the things that bite when a Desktop session continues in a terminal
+    try:
+        oa = load(os.path.join(HOME, ".claude.json")).get("oauthAccount") or {}
+    except (OSError, ValueError):
+        oa = {}
+    st = p.state()
+    if not oa.get("accountUuid"):
+        say("  WARNING: the terminal CLI shows no signed-in account (~/.claude.json): run `claude` and /login first")
+    elif st.get("account") and oa["accountUuid"] != st["account"]:
+        say(f"  WARNING: different account. The terminal CLI is signed in as {oa.get('emailAddress') or oa['accountUuid'][:8]}, "
+            f"this Desktop session runs as {email(reg, st['account'])}. Continuing crosses accounts"
+            f"{' AND orgs' if oa.get('organizationUuid') and oa.get('organizationUuid') != st.get('active_org') else ''}: "
+            f"thinking-block signatures made by one may be rejected by the other (cross-org is unverified). Sign the CLI "
+            f"in to the same account to be safe.")
+    wrote = None
+    with open(transcript(cli), encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = re.search(r'"version":\s*"(\d+\.\d+\.\d+)"', line)
+            if m and (wrote is None or _vkey(m.group(1)) > _vkey(wrote)):
+                wrote = m.group(1)
+    exe = shutil.which("claude")
+    have = None
+    if exe:
+        try:
+            have = re.search(r"\d+\.\d+\.\d+", subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                                               timeout=20).stdout or "")
+            have = have.group(0) if have else None
+        except (OSError, subprocess.SubprocessError):
+            have = None
+    if not exe:
+        say("  WARNING: no `claude` command on PATH: install Claude Code for the terminal first")
+    elif have and wrote and _vkey(have) < _vkey(wrote):
+        say(f"  WARNING: your terminal CLI ({have}) is older than the one that last wrote this conversation ({wrote}). "
+            f"It may not know the model Desktop used ({rec.get('model') or '?'}) or newer record types: update it "
+            f"first (`claude update`).")
+    if rec.get("model") or rec.get("effort"):
+        say(f"  Desktop ran it with model {rec.get('model') or '(default)'}, effort {rec.get('effort') or '(default)'}; "
+            f"add --model / --effort if you want the same in the terminal.")
+    say("  notes: it stays listed in Desktop (the same conversation; Desktop shows the new turns when you next open "
+        "it there). Never have it open in both at once. Desktop-only tools (Desktop's MCP servers, computer use, "
+        "the browser pane) are not available in the terminal; queued background work stays with Desktop.")
+
+
+def unregister(p, only):
+    p.require_quit()
+    d, a, r, rec = _record(p, only)
+    arch = archive(p, "unregister", [d], {"record": os.path.basename(r), "cli": rec.get("cliSessionId")})
+    remove(r)
+    say(f"{p.name}: {'would remove' if DRY else 'removed'} the Desktop record for {rec.get('title')!r}. Archive: {arch}")
+    say(f"  the conversation is untouched; continue it in the terminal:  cd '{rec.get('cwd')}' && claude --resume "
+        f"{rec.get('cliSessionId')}")
+    say(f"  undo:  ccd-rehome rollback {p.name} {arch}")
+    say("  if Desktop later offers to 'Recover CLI sessions' for it, decline (that import rewrites the transcript); "
+        "use `ccd-rehome register` to bring it back")
+
+
+# ---------------- export-record / adopt (the transplant interface) ----------------
+RECORD_FORMAT = "ccd-record/1"
+
+
+def export_record(p, only, out):
+    if not only or len(only) != 1:
+        die("export-record needs exactly one --only ID")
+    hits = [(d, a, r, rec) for d, a, o, r, rec in inventory(p, {}) if sid_of(r)[6:].startswith(only[0])]
+    if len(hits) != 1:
+        die(f"--only {only[0]!r} matches {len(hits)} records (ids: `ccd-rehome sessions {p.name}`)")
+    d, a, r, rec = hits[0]
+    errors, drift = validate([d])
+    errors = [e for e in errors if os.path.basename(r) in e]
+    if errors or rec is None:
+        die("refusing: " + "; ".join(errors or [f"{r} is unreadable"]))
+    body = {k: v for k, v in rec.items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+    doc = {"format": RECORD_FORMAT, "tool": f"ccd-rehome {VERSION}", "desktop": desktop_version([p.path]),
+           "exported_utc": now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"), "record": body,
+           "notes": [x for x in drift if os.path.basename(r) in x]}
+    if out:
+        write_json(out, doc, indent=2)
+        say(f"exported {rec.get('title')!r} ({sid_of(r)}) -> {out}")
+    else:
+        print(json.dumps(doc, indent=2, ensure_ascii=False))
+
+
+def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, accept_drift=False):
+    p.require_quit()
+    try:
+        doc = load(path)
+    except (OSError, ValueError) as e:
+        die(f"cannot read {path}: {e}")
+    if not isinstance(doc, dict) or doc.get("format") != RECORD_FORMAT or not isinstance(doc.get("record"), dict):
+        die(f"{path} is not a {RECORD_FORMAT} file (make one with `ccd-rehome export-record`)")
+    rec = dict(doc["record"])
+    if cli:
+        rec["cliSessionId"] = cli
+    if not re.fullmatch(r"local_" + UUID, rec.get("sessionId") or "") or not isinstance(rec.get("cliSessionId"), str):
+        die("refusing: the record needs a sessionId local_<uuid> and a cliSessionId")
+    acct, org, dst, blocker, note = plan_target(p, reg, to, to_org)
+    if blocker:
+        die(f"{p.name}: {blocker}")
+    # same validation as a move, on a scratch copy of the record
+    with tempfile.TemporaryDirectory() as td:
+        sd = os.path.join(td, STORES["code"], "a", "o"); os.makedirs(sd)
+        with open(os.path.join(sd, rec["sessionId"] + ".json"), "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        errors, drift = validate([sd])
+    for x in errors:
+        say(f"    ERROR  {x.split(': ', 1)[-1]}")
+    for x in drift:
+        say(f"    DRIFT  {x.split(': ', 1)[-1]}")
+    if errors:
+        die("refusing: the record is not in a format this tool knows; nothing was changed")
+    if drift and not accept_drift and not DRY:
+        die("refusing: the record has fields this tool does not know (DRIFT above); review, then --accept-drift")
+    # never register the same conversation twice
+    for d, a, o, r, other in inventory(p, reg):
+        if other and other.get("cliSessionId") == rec["cliSessionId"]:
+            if d == dst:
+                say(f"{p.name}: {other.get('title')!r} is already registered here ({os.path.basename(r)}); nothing to do")
+                return None
+            die(f"refusing: that conversation is already in this profile under {email(reg, a)} ({os.path.basename(r)}). "
+                f"Use `ccd-rehome move` instead")
+    taken = {sid_of(r) for _, _, _, r, _ in inventory(p, reg)}
+    if rec["sessionId"] in taken:
+        rec["sessionId"] = f"local_{__import__('uuid').uuid4()}"
+        say(f"  note: that sessionId is taken in this profile; filing it as {rec['sessionId']}")
+    if cwd:
+        if rec.get("cwd") != cwd:
+            dropped = [k for k in HOST_BOUND if k in rec]
+            for k in HOST_BOUND:
+                rec.pop(k, None)
+            if dropped:
+                say(f"  new cwd: dropped fields bound to the old machine: {', '.join(dropped)}")
+        rec["cwd"] = rec["originCwd"] = cwd
+        if not os.path.isdir(cwd):
+            say(f"  note: {cwd} does not exist (yet) on this machine")
+    if title:
+        rec["title"] = title
+    if LOCAL_MODEL_RE.match(rec.get("model") or ""):
+        rec["model"] = FALLBACK_MODEL
+    if not transcript(rec["cliSessionId"]):
+        say(f"  note: no transcript {rec['cliSessionId']}.jsonl under {short(PROJECTS)} yet: Desktop will list the "
+            f"session but cannot open it until the conversation is placed (session-transporter does that)")
+    here = os.path.join(dst, rec["sessionId"] + ".json")
+    say(f"{p.name}: adopt {rec.get('title')!r} -> {email(reg, acct)} / org {org[:8]}  ({short(here)})")
+    if note:
+        say(f"  note: {note}")
+    arch = archive(p, "adopt", [dst], {"record": rec["sessionId"], "cli": rec["cliSessionId"], "to": acct, "org": org})
+    write_json(here, rec)
+    say(f"{'dry run complete: nothing was written; the real run would do the above' if DRY else 'done'}. "
+        f"Archive: {arch}{' (not created)' if DRY else ''}")
+    say(f"undo:  ccd-rehome rollback {p.name} {arch}")
+    return here
+
+
+# ---------------- reports ----------------
+def describe(p, reg, as_json=False):
+    st = p.state()
+    acct, org, dst, blocker, _ = plan_target(p, reg) if st["verdict"] == "signed-in" else \
+        (None, None, None, f"not signed in ({st['verdict']})", None)
+    inv = inventory(p, reg)
+    vis = [x for x in inv if x[0] == dst]
+    stranded = {}
+    for d, a, o, r, rec in inv:
+        if d != dst:
+            stranded.setdefault(f"{email(reg, a)} / org {o[:8]}", 0)
+            stranded[f"{email(reg, a)} / org {o[:8]}"] += 1
+    cw = [x for x in inventory(p, reg, "cowork") if not dst or x[0] != os.path.join(p.store("cowork"), acct, org)]
+    return {"profile": p.name, "path": p.path, "running": bool(p.pids()), "verdict": st["verdict"],
+            "account": st["account"], "email": email(reg, st["account"]) if st["account"] else None,
+            "last_account_email": email(reg, st["last_account"]) if st["last_account"] else None,
+            "cookie_expires": st["cookie_expires"], "active_dir": dst, "blocker": blocker,
+            "visible": [{"id": sid_of(r)[6:14], "title": (rec or {}).get("title")} for _, _, _, r, rec in vis],
+            "stranded": stranded, "cowork_stranded": len(cw), "archives": archives(p)}
+
+
+def status(paths, reg, as_json):
+    rows = [describe(Profile(x), reg) for x in paths]
+    if as_json:
+        print(json.dumps(rows, indent=2)); return
+    for r in rows:
+        who = r["email"] or (f"(last: {r['last_account_email']})" if r["last_account_email"] else "")
+        say(f"\n{r['profile']}: {r['verdict'].upper()} {who}  {'RUNNING' if r['running'] else 'quit'}"
+            f"  login cookie expires {r['cookie_expires'] or '-'}" + (f"   [{short(r['path'])}]" if os.sep in r['profile'] or r['profile'] == 'default' else ""))
+        say(f"  shown in Desktop: {len(r['visible'])} session(s)  {short(r['active_dir']) if r['active_dir'] else '-'}")
+        for s in r["visible"]:
+            say(f"    {s['id']} {s['title']}")
+        for k, v in r["stranded"].items():
+            say(f"  STRANDED (Desktop does not list these): {v} under {k}")
+        if r["cowork_stranded"]:
+            say(f"  STRANDED Cowork item(s): {r['cowork_stranded']}  (move with --include-cowork)")
+        if r["stranded"] or r["cowork_stranded"]:
+            say(f"  -> {'blocked: ' + r['blocker'] if r['blocker'] else 'fix: ccd-rehome rehome ' + r['profile']}"
+                f"   (pick sessions: ccd-rehome sessions {r['profile']})")
+        if r["archives"]:
+            say(f"  archives (newest last): {', '.join(r['archives'][-3:])}")
+
+
+def sessions(p, reg, as_json):
+    st = p.state()
+    dst = plan_target(p, reg)[2] if st["verdict"] == "signed-in" else None
+    rows = []
+    for kind in ("code", "cowork"):
+        cdst = dst if kind == "code" else (os.path.join(p.store("cowork"), *os.path.relpath(dst, p.store()).split(os.sep))
+                                           if dst else None)
+        for d, a, o, r, rec in inventory(p, reg, kind):
+            rec = rec or {}
+            t = transcript(rec.get("cliSessionId")) if kind == "code" else None
+            rows.append({"kind": kind, "id": sid_of(r)[6:], "cli": rec.get("cliSessionId"), "title": rec.get("title"),
+                         "account": a,
+                         "email": email(reg, a), "org": o, "visible": d == cdst,
+                         "last_activity": datetime.datetime.fromtimestamp(rec["lastActivityAt"] / 1000).strftime(
+                             "%Y-%m-%d %H:%M") if rec.get("lastActivityAt") else None,
+                         "archived": bool(rec.get("isArchived")), "model": rec.get("model"),
+                         "queued_tasks": (rec.get("armedWorkAtQuit") or {}).get("backgroundTaskCount", 0),
+                         "transcript_mb": round(os.path.getsize(t) / 2 ** 20, 1) if t else None,
+                         "cwd": rec.get("cwd")})
+    if as_json:
+        print(json.dumps({"profile": p.name, "path": p.path, "signed_in": email(reg, st["account"]) if st["account"]
+                          else None, "verdict": st["verdict"], "sessions": rows}, indent=2)); return
+    say(f"{p.name}: {st['verdict']} {email(reg, st['account']) if st['account'] else ''}   [{short(p.path)}]")
+    say(f"  {'id':8}  {'shown':5}  {'account':26} {'org':8}  {'last activity':16}  {'MB':>6}  title")
+    for x in sorted(rows, key=lambda x: (not x["visible"], x["email"], x["last_activity"] or ""), reverse=False):
+        flags = (" [archived]" if x["archived"] else "") + (f" [{x['queued_tasks']} queued]" if x["queued_tasks"] else "") + \
+                (" [cowork]" if x["kind"] == "cowork" else "") + \
+                (" [transcript MISSING]" if x["kind"] == "code" and x["transcript_mb"] is None else "")
+        say(f"  {x['id'][:8]:8}  {'yes' if x['visible'] else 'NO':5}  {x['email'][:26]:26} {x['org'][:8]:8}  "
+            f"{x['last_activity'] or '-':16}  {x['transcript_mb'] if x['transcript_mb'] is not None else '-':>6}  "
+            f"{(x['title'] or '')[:50]}{flags}")
+    say(f"  {sum(x['visible'] for x in rows)} shown, {sum(not x['visible'] for x in rows)} not shown. "
+        f"Move some: ccd-rehome move {p.name} [--to EMAIL] --only ID ...")
+
+
+def doctor():
+    """Readiness check for a new machine. Writes nothing (beyond a probe file to test the state dir)."""
+    ok = True
+    def line(good, what, hint=""):
+        nonlocal ok
+        ok = ok and good is not False
+        mark = "ok  " if good else ("WARN" if good is None else "FAIL")
+        say(f"  [{mark}] {what}" + (f"\n         -> {hint}" if hint and not good else ""))
+    say(f"ccd-rehome {VERSION} doctor  ({os_version()}, support: {SUPPORT})")
+    line(sys.version_info >= (3, 9), f"Python {sys.version.split()[0]}", "needs Python 3.9 or newer")
+    line(True, f"sqlite3 {sqlite3.sqlite_version}")
+    line(os.path.isdir(DEFAULT_PROFILE) or None, f"default Desktop profile {short(DEFAULT_PROFILE)}",
+         "not found: fine if you only use --user-data-dir profiles")
+    exe = os.environ.get("CCD_REHOME_DESKTOP") or ("/Applications/Claude.app" if MAC else
+          os.path.join(os.environ.get("LOCALAPPDATA", ""), "AnthropicClaude", "claude.exe") if WIN else
+          next((shutil.which(c) for c in LINUX_LAUNCHERS if shutil.which(c)), None))
+    line(bool(exe and os.path.exists(exe)) or None, f"Desktop app {exe or 'claude-desktop (not on PATH)'}",
+         "`launch` needs it; set CCD_REHOME_DESKTOP=/path/to/binary, or start Desktop yourself")
+    found = discover()
+    line(bool(found) or None, f"{len(found)} profile(s) found", "launch Desktop once so it creates its profile")
+    for x in found:
+        p = Profile(x); d, shared = p.log_dir()
+        has = bool(glob.glob(os.path.join(d, "main*.log")))
+        line(has or None, f"{p.name}: logs {short(d)}{' (shared by all instances)' if shared else ''}",
+             "no Desktop log yet: launch it once; until then the target org comes from folders/registry")
+    try:
+        os.makedirs(STATE, 0o700, exist_ok=True)
+        t = os.path.join(STATE, f".w{os.getpid()}"); open(t, "w").close(); os.remove(t)
+        line(True, f"state dir {short(STATE)} writable")
+    except OSError as e:
+        line(False, f"state dir {short(STATE)}: {e}", "set CCD_REHOME_STATE to a writable folder")
+    # ---- drift: does this Desktop still match the contract the tool was written against?
+    keys, entries, nrec, cw_user = {}, {}, 0, []
+    for x in found:
+        p = Profile(x)
+        for kind in STORES:
+            for d in p.dirs(kind):
+                for e in os.listdir(d):
+                    cls = entry_class(kind, e)
+                    if cls == "unknown":
+                        entries.setdefault(e, short(d))
+                    elif cls == "userdata" and has_content(os.path.join(d, e)):
+                        cw_user.append(e)
+        for d, a, o, r, rec in inventory(p, {}, "code"):
+            if rec:
+                nrec += 1
+                for k in rec:
+                    if k not in KNOWN_KEYS:
+                        keys.setdefault(k, r)
+    line(not keys or None, f"record fields: {nrec} record(s) checked, {len(keys)} unknown field(s)"
+         + (": " + ", ".join(sorted(keys)) if keys else ""),
+         "DRIFT: Desktop added record fields. For each, decide keep / ACCOUNT_BOUND / TRANSIENT (look at its value "
+         "in the record named below), add it to KNOWN_KEYS, add a selftest check, note it in references/mechanics.md "
+         "§7. Example: " + (short(next(iter(keys.values()))) if keys else ""))
+    line(not entries or None, f"session-dir entries: {len(entries)} unknown" + (": " + ", ".join(sorted(entries)) if entries else ""),
+         "DRIFT: Desktop stores something new per account. Find out what it is before the next move (it is NOT "
+         "moved today); then teach move() about it, add a selftest fixture, update mechanics.md")
+    if cw_user:
+        line(None, f"Cowork user data present ({', '.join(sorted(set(cw_user)))}): Code moves work; Cowork moves "
+             f"(--include-cowork) are refused until their link to sessions is understood",
+             "not an error. To help: see SKILL.md \"Maintaining this skill\"")
+    for x in found:
+        p = Profile(x)
+        if glob.glob(os.path.join(p.log_dir()[0], "main*.log")) and os.path.isdir(p.store()) and p.dirs():
+            line(bool(p.loaded_lines()) or None, f"{p.name}: Desktop's 'Loaded N persisted sessions from' log line found",
+                 "DRIFT: the log format the tool reads (target org, verify) may have changed. Compare a fresh main.log "
+                 "with references/mechanics.md §2-3 and update the patterns in Profile.real_inits / loaded_lines")
+    dv = desktop_version(found)
+    cn = compat_note(dv)
+    line(None if cn else True, f"Desktop {dv or '?'}: " + ("in tested.json" if not cn else "not in tested.json"),
+         (cn or "") + ". Submitting a report helps everyone: CONTRIBUTING.md")
+    line(None if not PLATFORM.startswith("linux") else True,
+         "platform verified" if PLATFORM.startswith("linux") else "platform not verified on this OS",
+         "run `python3 -I selftest.py`, then use --dry-run and `verify` on your first real move")
+    say("  ready" if ok else "  not ready: fix the FAIL lines above")
+    sys.exit(0 if ok else 1)
+
+
+def report(found, checks):
+    """A compatibility entry for tested.json: versions and what was verified. Nothing identifying (no emails,
+    uuids, paths, host or user names), so it can be pasted into a public issue or pull request as-is."""
+    fam = "macOS" if MAC else "Windows" if WIN else "Linux"
+    keys, entries = set(), set()
+    for x in found:
+        p = Profile(x)
+        _, drift = validate([d for k in STORES for d in p.dirs(k)])
+        for d in drift:
+            m = re.search(r"unknown record field\(s\) (.+?): they", d)
+            if m:
+                keys.update(k.strip() for k in m.group(1).split(","))
+            m = re.search(r"([^/\\]+): unknown entry", d)
+            if m:
+                entries.add(m.group(1))
+    entry = {"tool": VERSION, "desktop": desktop_version(found), "os_family": fam, "os": os_version(),
+             "arch": platform.machine().lower(), "python": platform.python_version(),
+             "date": datetime.date.today().isoformat(), "profiles": len(found),
+             "drift": {"unknown_record_fields": len(keys), "unknown_entries": len(entries)},
+             "verified": checks or ["doctor"]}
+    print(json.dumps(entry, indent=2))
+    say("\n# Add this to tested.json (\"tested\" list) in a pull request, or paste it into an issue.")
+    say("# `verified` should name what you actually ran, e.g.: report selftest dry-run rehome verify rollback")
+
+
+def main():
+    global DRY
+    os.umask(0o077)
+    for stream in (sys.stdout, sys.stderr):         # a title with an emoji must not crash a Windows console
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    if sys.argv[1:2] == ["doctor"]:
+        return doctor()
+    ap = argparse.ArgumentParser(prog="ccd-rehome", usage=__doc__.split("\n\n")[1],
+                                 description="\n\n".join(__doc__.split("\n\n")[2:]),
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("cmd", choices=("profiles", "status", "sessions", "accounts", "rehome", "move", "rollback",
+                                    "quit", "launch", "verify", "report", "export-record", "adopt",
+                                    "cli-sessions", "register", "resume-cli", "unregister"))
+    ap.add_argument("args", nargs="*")
+    ap.add_argument("--all", action="store_true"); ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only", nargs="+"); ap.add_argument("--from", dest="frm", nargs="+")
+    ap.add_argument("--to"); ap.add_argument("--to-org")
+    ap.add_argument("--include-cowork", action="store_true"); ap.add_argument("--json", action="store_true")
+    ap.add_argument("--accept-drift", action="store_true", help="proceed although validation reported DRIFT")
+    ap.add_argument("--out"); ap.add_argument("--record"); ap.add_argument("--cwd"); ap.add_argument("--to-profile")
+    ap.add_argument("--cli-session-id"); ap.add_argument("--title")
+    ap.add_argument("--version", action="version", version=f"ccd-rehome {VERSION}")
+    o = ap.parse_args()
+    DRY = o.dry_run
+    if not DRY:
+        os.makedirs(STATE, 0o700, exist_ok=True)
+    named = [] if o.cmd == "report" else \
+        [Profile(a).path for a in (o.args[:1] if o.cmd in ("rollback", "move", "sessions", "quit", "launch", "verify",
+                                                            "export-record", "adopt", "register", "resume-cli",
+                                                            "unregister") else o.args)]
+    found = discover()
+    reg = refresh_registry(found + [x for x in named if x not in found])
+    if o.cmd == "profiles":
+        rows = []
+        for x in found:
+            p = Profile(x); st = p.state()
+            rows.append({"profile": p.name, "path": p.path, "running": bool(p.pids()), "verdict": st["verdict"],
+                         "email": email(reg, st["account"]) if st["account"] else None})
+        if o.json:
+            print(json.dumps(rows, indent=2)); return
+        for r in rows:
+            say(f"{r['profile']:22} {r['verdict']:10} {r['email'] or '-':28} {'RUNNING' if r['running'] else 'quit':8}"
+                f" {short(r['path'])}")
+        return
+    if o.cmd == "report":
+        return report(found, o.args)
+    if o.cmd == "cli-sessions":
+        return cli_sessions(found + [x for x in named if x not in found], o.json)
+    if o.cmd == "accounts":
+        if o.json:
+            print(json.dumps(reg, indent=2)); return
+        for u, e in sorted(reg.items(), key=lambda x: x[1].get("email") or "~"):
+            say(f"{u}  {e.get('email') or '(email unknown)':28} orgs: "
+                f"{', '.join(k[:8] + (' ' + v if v else '') for k, v in e.get('orgs', {}).items()) or '-'}")
+        return
+    if o.cmd == "status":
+        return status(named or found, reg, o.json)
+    if o.cmd == "rehome":
+        targets = found if o.all else named
+        if not targets:
+            die("name a profile (or --all)")
+        failed = []
+        for x in targets:
+            p = Profile(x)
+            if o.all:                                   # --all: do what is safe, explain the rest, never stop early
+                d = describe(p, reg)
+                if not d["stranded"] and not (o.include_cowork and d["cowork_stranded"]):
+                    continue
+                if d["running"]:
+                    say(f"{p.name}: SKIPPED, running. Quit it, then: ccd-rehome rehome {p.name}"); failed.append(p.name)
+                    continue
+                if d["blocker"]:
+                    say(f"{p.name}: SKIPPED, {d['blocker']}"); failed.append(p.name); continue
+            try:
+                move(p, reg, cowork=o.include_cowork, accept_drift=o.accept_drift)
+            except SystemExit as e:
+                if not o.all:
+                    raise
+                say(f"{p.name}: FAILED, {e}"); failed.append(p.name)
+        if failed:
+            sys.exit(f"ccd-rehome: not done: {', '.join(failed)}")
+        return
+    if not named:
+        die(f"{o.cmd} needs a profile")
+    p = Profile(named[0])
+    if o.cmd == "sessions":
+        return sessions(p, reg, o.json)
+    if o.cmd == "move":
+        if o.to_profile:
+            return move_to_profile(p, reg, o.only, o.to_profile, o.to, o.to_org, o.accept_drift)
+        move(p, reg, o.to, o.to_org, o.frm, o.only, o.include_cowork, accept_drift=o.accept_drift); return
+    if o.cmd == "register":
+        if not o.cli_session_id:
+            die("register needs --cli-session-id ID (list them: ccd-rehome cli-sessions)")
+        return register(p, reg, o.cli_session_id, o.cwd, o.to, o.to_org, o.title, o.accept_drift)
+    if o.cmd == "resume-cli":
+        return resume_cli(p, reg, (o.only or [None])[0])
+    if o.cmd == "unregister":
+        return unregister(p, (o.only or [None])[0])
+    if o.cmd == "export-record":
+        return export_record(p, o.only, o.out)
+    if o.cmd == "adopt":
+        if not o.record:
+            die("adopt needs --record FILE")
+        adopt(p, reg, o.record, o.to, o.to_org, o.cwd, o.cli_session_id, o.title, o.accept_drift); return
+    if o.cmd == "rollback":
+        if len(o.args) != 2:
+            die("rollback PROFILE ARCHIVE")
+        return rollback(p, o.args[1])
+    if o.cmd == "quit":
+        mine = set(p.pids()) & set(ancestors())
+        if mine:
+            die(f"refusing: this command is running INSIDE {p.name} (pid {sorted(mine)[0]} is one of its processes); "
+                f"quitting it would end this very session. Ask the user to quit {p.name} themselves.")
+        if WIN:
+            die("quit is not supported on Windows (the only signal Python can send there is a hard kill). "
+                "Use File > Quit in that window.")
+        pid = p.browser_pid()
+        if not pid:
+            say(f"{p.name} is not running" if not p.pids() else f"{p.name}: cannot find its main process; quit it from the menu")
+            return
+        os.kill(pid, signal.SIGTERM)
+        sent = datetime.datetime.now().replace(microsecond=0)
+        t0, main_gone = time.time(), None
+        while time.time() - t0 < 180:            # Desktop exits in ~1 s; the CLI children it started can take longer
+            time.sleep(1)
+            global _PROCS
+            _PROCS = None                         # fresh process snapshot each poll
+            left = p.pids()
+            if not left:
+                say(f"{p.name} quit ({time.time() - t0:.0f}s)"); return
+            if main_gone is None and time.time() - t0 > 30 and _alive(pid):
+                _LOG_CACHE.clear()
+                began = [t for t, _ in p.log_lines(r".*(beforeQuit|willQuit): handler fired") if t >= sent]
+                if not began:          # seen on Desktop 1.9255.2 (Linux arm64): SIGTERM is ignored, quit never starts
+                    die(f"{p.name}: Desktop ignored the quit signal (no beforeQuit/willQuit in its log after 30s). "
+                        f"Quit it from its menu (File > Quit). If the window is frozen, force-close it "
+                        f"(kill -KILL {pid}) after checking nothing is mid-write; its session records on disk are safe.")
+            if main_gone is None and not _alive(pid):
+                main_gone = time.time() - t0
+                names = sorted({os.path.basename(_argv(x)[0]) if _argv(x) else "?" for x in left})
+                say(f"  Desktop itself exited after {main_gone:.0f}s; waiting for {len(left)} child process(es) to "
+                    f"finish: {', '.join(names)}")
+        names = sorted({os.path.basename(_argv(x)[0]) if _argv(x) else "?" for x in p.pids()})
+        die(f"{p.name}: {'Desktop exited, but ' if main_gone is not None else ''}{len(p.pids())} process(es) still "
+            f"running after 180s ({', '.join(names)}; pids {p.pids()[:6]}). Check what they are before moving anything.")
+    if o.cmd == "verify":
+        acct, org, dst, blocker, _ = plan_target(p, reg)
+        if blocker:
+            die(f"{p.name}: {blocker}")
+        hits = [(t, int(m.group(2))) for t, m in p.loaded_lines() if os.path.realpath(m.group(3)) == os.path.realpath(dst)]
+        if not hits:
+            die(f"{p.name}: Desktop has not logged loading {dst} yet. Launch it (and open the Code tab), then re-run")
+        t, got = hits[-1]
+        def created(r):
+            try:
+                return (load(r).get("createdAt") or 0) / 1000
+            except (OSError, ValueError):
+                return 0
+        # Desktop rewrites records while it runs and creates new ones; count only those that existed at that load
+        # (a move cannot happen while the instance runs, so moved records always predate the next load).
+        expect = sum(1 for r in records(dst) if created(r) <= t.timestamp() + 1)
+        ok = got == expect
+        say(f"{p.name}: {'OK' if ok else 'MISMATCH'}  Desktop loaded {got} session(s) at {t:%Y-%m-%d %H:%M:%S}; "
+            f"{expect} record(s) existed then ({len(records(dst))} on disk now)"
+            + ("" if ok else ". Quit and relaunch it, then re-run; if it persists see references/mechanics.md"))
+        sys.exit(0 if ok else 1)
+    if o.cmd == "launch":
+        if p.pids():
+            die(f"{p.name} is already running")
+        extra = [] if p.path == os.path.realpath(DEFAULT_PROFILE) else [f"--user-data-dir={p.path}"]
+        exe = os.environ.get("CCD_REHOME_DESKTOP")
+        if exe:
+            argv = [exe] + extra
+        elif MAC:
+            argv = ["open", "-n", "-a", "Claude", "--args"] + extra
+        elif WIN:
+            argv = [os.path.join(os.environ.get("LOCALAPPDATA", ""), "AnthropicClaude", "claude.exe")] + extra
+        else:                       # official name first; the community Debian package was renamed (4.x)
+            argv = [next((c for c in LINUX_LAUNCHERS if shutil.which(c)), LINUX_LAUNCHERS[0])] + extra
+        if not SANDBOX and not exe and not MAC and not (shutil.which(argv[0]) or os.path.exists(argv[0])):
+            die(f"cannot find the Desktop app ({argv[0]}). Start it yourself:  <Claude> {' '.join(extra)}\n"
+                f"  or set CCD_REHOME_DESKTOP=/path/to/the/app/binary")
+        if SANDBOX:
+            say(f"[sandbox] would run: {' '.join(argv)}"); return
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        say(f"launched {p.name}")
+
+
+if __name__ == "__main__":
+    main()

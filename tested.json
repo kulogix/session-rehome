@@ -1,0 +1,184 @@
+{
+  "about": "Combinations that passed. One entry per tool version x Desktop version x OS. `verified` lists what actually ran: selftest = the synthetic suite; doctor/status/dry-run = read-only on real profiles; move/rehome/rollback/verify/quit/launch = live operations on real profiles. `desktop` is the version that last ran the profile (from its log). Add yours with `ccd-rehome report <what you ran>` (CONTRIBUTING.md).",
+  "tested": [
+    {
+      "tool": "0.4.0",
+      "desktop": "2.31226.1",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "python": "3.14.6",
+      "date": "2026-11-07",
+      "profiles": 5,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "selftest",
+        "dry-run",
+        "move",
+        "rollback",
+        "rehome",
+        "launch",
+        "verify",
+        "quit"
+      ]
+    },
+    {
+      "tool": "0.5.0",
+      "desktop": "2.31226.1",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "arch": "x86_64",
+      "python": "3.14.6",
+      "profiles": 5,
+      "verified": [
+        "doctor",
+        "selftest",
+        "dry-run",
+        "move",
+        "rollback",
+        "rehome",
+        "launch",
+        "verify",
+        "quit"
+      ],
+      "date": "2026-11-07",
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      }
+    },
+    {
+      "tool": "0.5.0",
+      "desktop": "4.23118.0",
+      "os_family": "macOS",
+      "os": "macOS 26.6.2",
+      "arch": "arm64",
+      "python": "3.9.6",
+      "profiles": 1,
+      "verified": [
+        "doctor",
+        "selftest",
+        "status",
+        "dry-run"
+      ],
+      "notes": "first sighting of Desktop 4.x: 18 new record fields and the Cowork 4.x layout classified from this machine",
+      "date": "2026-11-07",
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      }
+    },
+    {
+      "tool": "0.5.0",
+      "desktop": "1.4758.0",
+      "os_family": "Linux",
+      "os": "Debian GNU/Linux 13",
+      "arch": "aarch64",
+      "python": "3.13.5",
+      "profiles": 1,
+      "verified": [
+        "doctor",
+        "selftest",
+        "status",
+        "dry-run"
+      ],
+      "notes": "desktop = version that last ran the profile (per its log); the installed package was newer",
+      "date": "2026-11-07",
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      }
+    },
+    {
+      "tool": "0.6.1",
+      "desktop": "1.9255.2",
+      "os_family": "Linux",
+      "os": "Debian GNU/Linux 13",
+      "arch": "aarch64",
+      "python": "3.13.5",
+      "date": "2026-11-07",
+      "profiles": 1,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "status",
+        "launch",
+        "verify"
+      ],
+      "notes": "this build writes no lastKnownAccountUuid and no Login-state lines (handled since 0.6.1); it IGNORES SIGTERM, so `quit` reports that and the app must be quit from its menu"
+    },
+    {
+      "tool": "0.6.2",
+      "desktop": "4.23118.0",
+      "os_family": "Linux",
+      "os": "Debian GNU/Linux 13",
+      "arch": "aarch64",
+      "python": "3.13.5",
+      "date": "2026-11-07",
+      "profiles": 1,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "status",
+        "verify",
+        "quit"
+      ],
+      "notes": "community Debian package claude-desktop-unofficial (renamed from claude-desktop at 4.x); SIGTERM honoured again (quit 1 s); profile carried over from 1.9255.2"
+    },
+    {
+      "tool": "0.7.0",
+      "desktop": "2.31226.1",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "arch": "x86_64",
+      "python": "3.14.6",
+      "date": "2026-11-07",
+      "profiles": 5,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "selftest",
+        "cli-sessions",
+        "register",
+        "launch",
+        "verify",
+        "resume-cli",
+        "quit"
+      ]
+    },
+    {
+      "tool": "0.7.2",
+      "desktop": "2.31226.1",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "arch": "x86_64",
+      "python": "3.14.6",
+      "date": "2026-11-07",
+      "profiles": 5,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "selftest",
+        "register",
+        "launch",
+        "verify",
+        "resume-cli",
+        "quit",
+        "round-trip CLI->Desktop->CLI (real turns, CLI 2.1.319)"
+      ]
+    }
+  ]
+}
