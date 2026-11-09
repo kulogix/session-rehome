@@ -141,7 +141,9 @@ script, and `doctor` flags any key outside it.
   from value shapes on one machine; if a later version shows one of them to be account-bound, move it.
 - **Host-bound fields (dropped by `adopt --cwd`, kept by same-host moves):** `gitAnchors`,
   `gitAnchorsFolderRealpath`, `gitAnchorsLookupOnly`, `planPath`, `shellFolders`, `chromeTabGroupId`,
-  `cuSelectedDisplayId`, `cuLastScreenshotDims`, `cuAllowedApps`. They name the origin machine's filesystem,
+  `cuSelectedDisplayId`, `cuLastScreenshotDims`, `cuAllowedApps`, and (0.11.1, first seen on Desktop 4.23118.0
+  macOS) `startedFromEnvironmentId`, the SSH/WSL/... environment the session started in [C: Desktop validates it
+  beside `sshConfig`/`wslConfig` as an id or null]. They name the origin machine's filesystem,
   displays, apps or browser tabs, so on another host they would point at things that don't exist. They are
   dropped rather than rewritten; Desktop records them afresh as the session is used. Classified from value
   shapes; adopted records were then loaded by Desktop's CLI on macOS and Linux ARM (session-transporter

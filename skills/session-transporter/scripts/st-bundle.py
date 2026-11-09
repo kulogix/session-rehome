@@ -25,7 +25,7 @@ Never edits a transcript. Never reads or packs credentials, ~/.claude.json, hist
 import argparse, datetime, glob, hashlib, io, json, os, platform, re, shutil, subprocess, sys, tempfile, unicodedata
 import zipfile
 
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 FORMAT = "claude-session-bundle/1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)

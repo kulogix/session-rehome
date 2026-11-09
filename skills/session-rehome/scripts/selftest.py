@@ -551,7 +551,7 @@ try:
         contextExceededCount=3, cuAllowedApps=[{"bundleId": "x"}], cuGrantFlags={"clipboardRead": False},
         cuLastScreenshotDims={"width": 1}, cuSelectedDisplayId=1, interruptedAwaitingPerson=None,
         lastAssistantCliSessionId="cli-n1", lastTurnEdgeAt=1, planPath="/p/plan.md", previousTitles=["t"],
-        queryCrashes=[], shellFolders=["/p"], spawnedFrom={"sessionId": "local_x"}, turnBoxDeclared=True,
+        queryCrashes=[], shellFolders=["/p"], spawnedFrom={"sessionId": "local_x"}, startedFromEnvironmentId="env_01x", turnBoxDeclared=True,
         turnBoxMounted=True, turnWrapUp={"description": "d"})
     os.makedirs(os.path.join(s4, A, OA, "waiting-input")); os.makedirs(os.path.join(s4, B, OB, "waiting-input"))
     cw4 = os.path.join(v4, "local-agent-mode-sessions", A, OA)
@@ -762,7 +762,7 @@ try:
     src = profile(home, "acct-x1", logs=[init("09:00:00", A, OA)], signed_in=A)
     rx = rec(os.path.join(src, "claude-code-sessions", A, OA), "e1e1e1e1-0000-4000-8000-000000000001", "Café export",
              cwd="/old/host/proj", originCwd="/old/host/proj", gitAnchorsFolderRealpath="/old/host/proj",
-             planPath="/old/.claude/plans/p.md", shellFolders=["/old/host/proj/x"], cuAllowedApps=[{"bundleId": "a"}],
+             planPath="/old/.claude/plans/p.md", shellFolders=["/old/host/proj/x"], cuAllowedApps=[{"bundleId": "a"}], startedFromEnvironmentId="env_01x",
              chromeTabGroupId=7)
     out_f = os.path.join(home, "exported.json")
     rc, out = run(home, "export-record", "acct-x1", "--only", "e1e1e1e1", "--out", out_f)
@@ -783,7 +783,7 @@ try:
     pr = json.load(open(placed[0], encoding="utf-8")) if placed else {}
     check(rc == 0 and len(placed) == 1 and pr.get("cwd") == "/new/host/proj" and pr.get("originCwd") == "/new/host/proj",
           "adopt files the record under the signed-in account with the new cwd")
-    check(not {"gitAnchorsFolderRealpath", "planPath", "shellFolders", "cuAllowedApps", "chromeTabGroupId"} & set(pr)
+    check(not {"gitAnchorsFolderRealpath", "planPath", "shellFolders", "cuAllowedApps", "chromeTabGroupId", "startedFromEnvironmentId"} & set(pr)
           and pr.get("effort") == "xhigh" and pr.get("sessionSettings") == {"ultracode": True},
           "cross-host adopt drops fields bound to the old machine, keeps session settings")
     check(os.path.basename(placed[0])[:-5] == pr.get("sessionId") if placed else False, "file name == sessionId")

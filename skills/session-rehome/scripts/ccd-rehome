@@ -89,7 +89,7 @@ Project, docs and issues: https://github.com/kulogix/session-rehome
 import argparse, datetime, errno, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, stat, subprocess, \
     sys, tempfile, time
 
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 PROJECT_URL = "https://github.com/kulogix/session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
@@ -232,7 +232,8 @@ ACCOUNT_BOUND = ("remoteMcpServersConfig", "withheldConnectorHosts", "remoteCont
 # dropped when a record is adopted on another host / under another cwd (`adopt --cwd`), where they would name
 # things that do not exist. cwd/originCwd are rewritten instead.
 HOST_BOUND = ("gitAnchors", "gitAnchorsFolderRealpath", "gitAnchorsLookupOnly", "planPath", "shellFolders",
-              "chromeTabGroupId", "cuSelectedDisplayId", "cuLastScreenshotDims", "cuAllowedApps")
+              "chromeTabGroupId", "cuSelectedDisplayId", "cuLastScreenshotDims", "cuAllowedApps",
+              "startedFromEnvironmentId")   # Desktop 4.23118.0: the SSH/WSL/... environment it started in (this host)
 # Transient state Desktop recreates if still true.
 TRANSIENT = ("cliBinaryPin", "error", "errorAt", "errorRows", "priorErrorMark")
 # Models that only exist on a local/3p gateway; an Anthropic account cannot start them.
@@ -245,7 +246,7 @@ LINUX_LAUNCHERS = ("claude-desktop", "claude-desktop-unofficial")
 # ---- The contract with Desktop. `doctor` reports anything outside it as DRIFT, so a Desktop update that adds a
 # field, a file or a log format is noticed, classified and handled HERE (see SKILL.md "Maintaining this skill").
 # Record keys whose handling is decided: everything listed is KEPT unless it is in ACCOUNT_BOUND or TRANSIENT.
-KNOWN_KEYS = set(ACCOUNT_BOUND) | set(TRANSIENT) | {
+KNOWN_KEYS = set(ACCOUNT_BOUND) | set(TRANSIENT) | set(HOST_BOUND) | {
     "alwaysAllowedReasons", "armedWorkAtQuit", "autoChosenInApp", "autoModeServerFallbackPrompt", "chromePermissionMode",
     "classifierSummaryEnabled", "cliSessionId", "completedTurns", "createdAt", "cwd", "devIntentTriggers", "devIntents",
     "effort", "envScopeId", "gitAnchors", "gitAnchorsFolderRealpath", "gitAnchorsLookupOnly", "isArchived",

@@ -730,9 +730,10 @@ class DocsStateTheEvidence(unittest.TestCase):
         """The newest entry says where the feature came from (a local DeepSeek V4.1 model, a written spec), that
         Claude reviewed it in seven adversarial rounds and repaired it, and that the real-CLI result is one run, with
         the manual test that re-runs it."""
-        version, body = changelog_newest(read_text(os.path.join(ROOT, "CHANGELOG.md")))
-        if version != "0.11.0":
-            self.skipTest("written for the 0.11.0 entry")
+        text = read_text(os.path.join(ROOT, "CHANGELOG.md"))
+        m = re.search(r"^## 0\.11\.0\b.*?(?=^## |\Z)", text, re.M | re.S)
+        self.assertIsNotNone(m, "CHANGELOG.md has no 0.11.0 entry")
+        version, body = "0.11.0", " ".join(m.group(0).split())   # the release that introduced CLI homes
         for rx in (r"implemented by a local DeepSeek V4\.1 model from a written spec",
                    r"reviewed by Claude in seven adversarial rounds", r"repaired by Claude",
                    r"the orchestrator's run on 2026-11-08", r"tests/e2e_real_cli\.py"):

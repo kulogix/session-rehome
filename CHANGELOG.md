@@ -4,6 +4,19 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.11.1 — 2026-11-09
+
+- **A Desktop record field first seen on a real Mac** (Desktop 4.23118.0, macOS 26.6), `startedFromEnvironmentId`,
+  made `doctor` report DRIFT and every move refuse there. Desktop's own code validates it next to `sshConfig` and
+  `wslConfig` as an id or null: the environment (SSH, WSL, ...) a session was started in, on that machine. It is now
+  known: kept when a session moves between accounts or windows on one machine, dropped (like the other
+  machine-bound fields) when `adopt --cwd` files the record on another machine.
+- Installed from GitHub on a Raspberry Pi (Debian 13 aarch64, Python 3.13) and a Mac (macOS 26.6, Python 3.9.6) with
+  `install.py`; `doctor` ready on both.
+
+**Tested:** `tests/run_all.py`: session-rehome 537 checks (0 new; two fixtures now carry the field),
+session-transporter 40 checks, repository tests.
+
 ## 0.11.0 — 2026-11-08
 
 **CLI homes: terminal accounts as profiles.** The terminal CLI keeps one config dir per account (`CLAUDE_CONFIG_DIR`;
