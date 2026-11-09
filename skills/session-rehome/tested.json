@@ -200,6 +200,68 @@
         "verify"
       ],
       "notes": "first release of session-rehome; read-only checks on 5 real profiles (all verify OK)"
+    },
+    {
+      "tool": "0.11.1",
+      "desktop": "2.31226.1",
+      "os_family": "Linux",
+      "os": "Ubuntu 26.04",
+      "arch": "x86_64",
+      "python": "3.14.6",
+      "date": "2026-11-09",
+      "profiles": 5,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "selftest",
+        "status",
+        "verify",
+        "cli-e2e"
+      ],
+      "notes": "5 real Desktop profiles (verify OK) and the default CLI home; tests/e2e_real_cli.py with the real Claude Code 2.1.319 passed"
+    },
+    {
+      "tool": "0.11.1",
+      "desktop": "4.23118.0",
+      "os_family": "macOS",
+      "os": "macOS 26.6.2",
+      "arch": "arm64",
+      "python": "3.9.6",
+      "date": "2026-11-09",
+      "profiles": 1,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "selftest",
+        "status"
+      ],
+      "notes": "real Mac; first full run on Python 3.9: tests/run_all.py all passed; found Desktop's startedFromEnvironmentId (classified in 0.11.1)"
+    },
+    {
+      "tool": "0.11.1",
+      "desktop": "4.23118.0",
+      "os_family": "Linux",
+      "os": "Debian GNU/Linux 13",
+      "arch": "aarch64",
+      "python": "3.13.5",
+      "date": "2026-11-09",
+      "profiles": 1,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "selftest",
+        "status"
+      ],
+      "notes": "Raspberry Pi, community Desktop package; tests/run_all.py all passed"
     }
   ]
 }
