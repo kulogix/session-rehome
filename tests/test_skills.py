@@ -69,7 +69,8 @@ class Skills(unittest.TestCase):
             "itertools", "json", "locale", "math", "os", "pathlib", "platform", "queue", "random", "re", "select",
             "shlex", "shutil", "signal", "socket", "sqlite3", "stat", "string", "struct", "subprocess", "sys",
             "tempfile", "textwrap", "threading", "time", "traceback", "unicodedata", "unittest", "urllib", "uuid",
-            "zipfile", "zlib", "__future__"}
+            "zipfile", "zlib", "__future__", "resource", "types", "ctypes", "selectors", "atexit", "weakref",
+            "secrets", "pathlib", "operator", "heapq", "bisect", "enum", "dataclasses", "typing"}
         local = {"mangle", "_common", "st_walk", "st_origin_probe", "st_mock_api"}
         bad = []
         for n in NAMES:
