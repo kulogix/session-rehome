@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""ccd-rehome — list, and move between accounts, the Code sessions of any Claude Desktop profile (user-data-dir).
-Desktop only shows the sessions filed under the account (and org) that is signed in; this puts them there.
+"""ccd-rehome — list, and move between accounts, the Code sessions of any Claude Desktop profile (user-data-dir)
+and of any Claude Code config dir (CLI home). Desktop only shows the sessions filed under the account (and org)
+that is signed in; this puts them there. A CLI home lists all of its sessions; this moves them to another home.
 
-  ccd-rehome profiles [--json]                   every Desktop profile found on this host (see "Discovery")
+  ccd-rehome profiles [--json]                   every Desktop profile and CLI home on this host, where each was
+                                                 found, and the state folder in use (see "Discovery")
+  ccd-rehome profiles --add PATH | --add-root DIR | --forget PATH
+                                                 register a Desktop profile or CLI home in any folder, or a folder
+                                                 whose subfolders are profiles or homes; --forget drops either
   ccd-rehome status   [PROFILE ...] [--json]     per profile: signed in as whom, running?, visible vs stranded
   ccd-rehome sessions PROFILE [--json]           every session record in the profile, the account it is filed
                                                  under, and whether Desktop shows it now
@@ -13,8 +18,12 @@ Desktop only shows the sessions filed under the account (and org) that is signed
                       [--include-cowork] [--dry-run]
   ccd-rehome move     PROFILE --only ID ... --to-profile PROFILE2 [--to ACCOUNT] [--dry-run]
                                                  to ANOTHER user-data-dir on this host (record only: the conversation
-                                                 is shared); any/all sessions -> any account. --to defaults to the signed-in
-                                                 account; ACCOUNT = email, uuid or uuid prefix
+                                                 stays in its CLI home); any/all sessions -> any account. --to defaults
+                                                 to the signed-in account; ACCOUNT = email, uuid or uuid prefix
+  ccd-rehome move     cli[:NAME] [--only ID ...] [--project DIR] --to-profile cli[:NAME] [--copy]
+                      [--no-memory] [--keep-dates] [--dry-run]
+                                                 CLI (terminal) sessions: move a transcript and its side files between
+                                                 Claude Code config dirs (cli = ~/.claude, cli:NAME = ~/.claude-NAME)
   ccd-rehome rollback PROFILE ARCHIVE [--dry-run]   undo one move or adopt exactly (archive names: `status PROFILE`)
   ccd-rehome export-record PROFILE --only ID [--out FILE]
                                                  one session record as a portable ccd-record/1 file (account-bound
@@ -44,43 +53,178 @@ Desktop only shows the sessions filed under the account (and org) that is signed
   Exit codes: 0 = done / nothing to do / OK.  1 = refused, failed, or verify MISMATCH (message says why).
   2 = bad command line. Every report command takes --json; parse that rather than the text.
 
-  PROFILE = `default` (plain claude-desktop), a name under ~/.claude-instances (acct-e), or ANY user-data-dir path.
+  PROFILE = `default` (plain claude-desktop), a folder name (`work`: the folder of that name in a profile root,
+  else a known profile whose folder is called that; exactly one, or it is refused with the paths), or ANY
+  user-data-dir path. Any folder works; ~/.claude-instances is only an example. A CLI home is a Claude Code config
+  dir (`CLAUDE_CONFIG_DIR`): `cli` = ~/.claude, `cli:NAME` = ~/.claude-NAME (else the one known home whose folder is
+  NAME or .claude-NAME), or any path to one. `profiles`, `status`, `sessions`, `rehome`, `move` and `rollback`
+  accept a CLI home too. While a profile root holds a Desktop profile `cli`, `cli` is ambiguous: give the path.
 
-Discovery (for `profiles`, `status` and `--all`): the default profile, ~/.claude-instances/*, every
---user-data-dir of a running Desktop, every --user-data-dir in a .desktop launcher, every path this tool was ever
-given, and $CCD_REHOME_PROFILES (paths separated by ':', or ';' on Windows).
+Discovery (for `profiles`, `status` and `--all`, which skips CLI homes): the default profile; every subfolder of a
+profile root (~/.claude-instances while it exists, each folder added with `profiles --add-root`, and each folder in
+$CCD_REHOME_INSTANCES); every --user-data-dir of a running Desktop, of a .desktop launcher, and of claude-desktop /
+claude-desktop-unofficial / Claude in a shell startup file; on macOS each profile Desktop's shared log names; every
+path added with `profiles --add` or given to the tool before; $CCD_REHOME_PROFILES. CLI homes: ~/.claude,
+~/.claude-*, the CLI homes in a profile root, each CLAUDE_CONFIG_DIR=/absolute/path assignment in shell startup
+files (comments skipped), this process's CLAUDE_CONFIG_DIR, $CCD_REHOME_CLI_HOMES, and every CLI home added or
+named on the command line before. Lists of paths are separated by ':' (';' on Windows). Never ~ itself, a folder
+above ~/.claude, ~/.claude-instances or a Desktop profile, or the tool's state folder.
 
-Never signs in or out, never reads credentials, never copies or edits transcripts (~/.claude/projects/), never
-touches another profile. Writes only session records + their side files inside the profile, an archive before
-every change, and its own state dir. How to use it: ../SKILL.md. How it works: ../references/mechanics.md.
+State folder (the account registry, the archives, what --add and --add-root registered): $CCD_REHOME_STATE; else
+~/.claude-instances/_rehome when an earlier version made it (it keeps being used, so its archives roll back); else
+$XDG_STATE_HOME/session-rehome (~/.local/state/session-rehome) on Linux,
+~/Library/Application Support/session-rehome on macOS, %LOCALAPPDATA%\\session-rehome on Windows. `profiles` prints
+the one in use. The tool never creates ~/.claude-instances.
+
+What it writes: a Desktop move changes only session records and their side files in the profiles it names; the
+conversation stays where it is. `move cli` moves a session's transcript and side files byte for byte from one CLI
+home into another (with --copy it copies them and keeps the source): a rename, or a copy checked by size and
+sha256 before the source is removed. It also copies the project memory, and may re-date an old transcript and the
+files of its sidecar folder (their mtimes, never their content). Every change is archived first (`rollback`
+undoes it), and the tool keeps its own state dir. Never signs in or out, never reads credentials
+(.credentials.json, sessions/*.key), never edits a transcript.
+How to use it: ../SKILL.md. How it works: ../references/mechanics.md.
 Project, docs and issues: https://github.com/kulogix/session-rehome
 """
-import argparse, datetime, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
+import argparse, datetime, errno, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, stat, subprocess, \
+    sys, tempfile, time
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 PROJECT_URL = "https://github.com/kulogix/session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
 HOME = os.environ.get("CCD_REHOME_HOME") or os.path.expanduser("~")
-INST = os.path.join(HOME, ".claude-instances")
-STATE = os.environ.get("CCD_REHOME_STATE") or os.path.join(INST, "_rehome")
-ARCHIVE = os.path.join(STATE, "archive")
-REGISTRY = os.path.join(STATE, "accounts.json")
-KNOWN_PROFILES = os.path.join(STATE, "profiles.json")
-PROJECTS = os.path.join(HOME, ".claude", "projects")
+SANDBOX = os.environ.get("CCD_REHOME_SANDBOX") == "1"      # self-test: no process scans, no real launches
 # CCD_REHOME_PLATFORM lets the sandboxed self-test exercise the macOS / Windows layouts on any OS
-PLATFORM = (os.environ.get("CCD_REHOME_PLATFORM") if os.environ.get("CCD_REHOME_SANDBOX") == "1" else None) or sys.platform
+PLATFORM = (os.environ.get("CCD_REHOME_PLATFORM") if SANDBOX else None) or sys.platform
 MAC, WIN = PLATFORM == "darwin", PLATFORM.startswith("win")
+# ~/.claude-instances is one example layout for Desktop profiles, never required: a default profile root only while it
+# exists (profile_roots), and the tool never creates it.
+INST = os.path.join(HOME, ".claude-instances")
+LEGACY_STATE = os.path.join(INST, "_rehome")             # where versions before 0.11.0 kept their state
+
+
+def _state_dir():
+    """(folder, why) of the tool's state: the account registry, the archive behind every change, the profiles and
+    profile roots it was given. CCD_REHOME_STATE decides; else ~/.claude-instances/_rehome while it exists (earlier
+    versions made it there: its archives roll back and its registry is kept); else the platform's per-user state
+    folder: $XDG_STATE_HOME/session-rehome (default ~/.local/state/session-rehome) on Linux, ~/Library/Application
+    Support/session-rehome on macOS, %LOCALAPPDATA%\\session-rehome on Windows. In the sandbox the real LOCALAPPDATA
+    is ignored, and XDG_STATE_HOME counts only under the sandbox HOME, so a self-test never writes a real state
+    folder."""
+    if os.environ.get("CCD_REHOME_STATE"):
+        return os.environ["CCD_REHOME_STATE"], "CCD_REHOME_STATE"
+    if os.path.isdir(LEGACY_STATE):
+        return LEGACY_STATE, "legacy"
+    if MAC:
+        base = os.path.join(HOME, "Library", "Application Support")
+    elif WIN:
+        base = (os.environ.get("LOCALAPPDATA") if not SANDBOX else None) or os.path.join(HOME, "AppData", "Local")
+    else:
+        x = os.environ.get("XDG_STATE_HOME") or ""
+        if SANDBOX and not x.startswith(HOME + os.sep):
+            x = ""
+        base = x if os.path.isabs(x) else os.path.join(HOME, ".local", "state")    # XDG: a relative one is invalid
+    return os.path.join(base, "session-rehome"), "default"
+
+
+STATE, STATE_WHY = _state_dir()
+ARCHIVE = os.path.join(STATE, "archive")
+# CLI-home archives live apart from Desktop ones: ARCHIVE/<key> is named after a Desktop profile, and a profile can be
+# called anything (`cli`, `cli-work`), so a CLI home's key there could name a Desktop profile's folder too.
+CLI_ARCHIVE = os.path.join(STATE, "cli-archive")
+REGISTRY = os.path.join(STATE, "accounts.json")
+KNOWN_PROFILES = os.path.join(STATE, "profiles.json")     # profiles and CLI homes added or named before (a list)
+KNOWN_ROOTS = os.path.join(STATE, "roots.json")           # profile roots added with `profiles --add-root` (a list)
+CLI_DEFAULT = os.path.join(HOME, ".claude")
+PROJECTS = os.path.join(CLI_DEFAULT, "projects")
+# Shell startup files that may name another Claude Code config dir (CLAUDE_CONFIG_DIR) or a Desktop user-data-dir.
+SHELL_FILES = (".bashrc", ".bash_aliases", ".bash_profile", ".profile", ".zshrc", ".zprofile",
+               os.path.join(".config", "fish", "config.fish"))
+# A real assignment only (matched per line, comments removed): at the start of a word (line start, or after
+# whitespace, ; & | ( or a quote, as in `alias x='CLAUDE_CONFIG_DIR=... claude'`), with no spaces around '='.
+# So never OLD_CLAUDE_CONFIG_DIR=..., and never a test such as `[ "$CLAUDE_CONFIG_DIR" = ~ ]`.
+CLAUDE_CONFIG_DIR_RE = re.compile(r"(?:^|(?<=[\s;&|('\"`]))CLAUDE_CONFIG_DIR="
+                                  r"(?:\"([^\"]*)\"|'([^']*)'|([^\s;&|()'\"`]+))")
+# A Desktop user-data-dir in a shell startup file: `--user-data-dir=PATH` or `--user-data-dir PATH`, anchored at the
+# start of a word as above, on a line that runs the Desktop app before it (DESKTOP_CMD_RE: claude-desktop,
+# claude-desktop-unofficial, or Claude as in `open -a Claude --args ...` and .../Claude.app/Contents/MacOS/Claude).
+USER_DATA_DIR_RE = re.compile(r"(?:^|(?<=[\s;&|('\"`]))--user-data-dir(?:=|\s+)"
+                              r"(?:\"([^\"]*)\"|'([^']*)'|([^\s;&|()'\"`]+))")
+DESKTOP_CMD_RE = re.compile(r"(?<![\w.-])(?:claude-desktop(?:-unofficial)?|Claude(?:\.app)?)(?![\w-])")
+HEAD_LINES, TAIL_BYTES = 400, 256 * 1024          # what `sessions` reads of a transcript, never the whole file
 DEFAULT_PROFILE = (os.path.join(HOME, "Library", "Application Support", "Claude") if MAC else
-                   os.path.join((os.environ.get("APPDATA") if not os.environ.get("CCD_REHOME_SANDBOX") == "1" else None)
+                   os.path.join((os.environ.get("APPDATA") if not SANDBOX else None)
                                 or os.environ.get("CCD_REHOME_APPDATA") or os.path.join(HOME, "AppData", "Roaming"),
                                 "Claude") if WIN
                    else os.path.join(HOME, ".config", "Claude"))
 # macOS Electron apps log to ~/Library/Logs/<App>; that dir may be shared by every instance of the app
 MAC_LOGS = os.path.join(HOME, "Library", "Logs", "Claude")
-SANDBOX = os.environ.get("CCD_REHOME_SANDBOX") == "1"      # self-test: no process scans, no real launches
+
+
+def _faults():
+    """TEST-ONLY fault injection for the self-test, honoured ONLY in the sandbox (CCD_REHOME_SANDBOX=1) and never on a
+    real run. CCD_REHOME_FAULT is a comma-separated list of:
+      exdev          every rename from one CLI home into another fails with EXDEV (two mounts of one filesystem)
+      short-copy:N   the copy made at step N loses its last byte before it is verified
+      fail-after:N   step N (0-based, so after N steps are done) of a CLI move or rollback raises OSError
+      kill-after:N   the process exits at once before step N, like a kill -9 or a power cut: no undo runs
+      kill-in-copy:N the process exits at once in the middle of the copy made at step N (written, not verified)
+      appear:N       while the copy made at step N is written, "another process" creates its destination
+      int-after-place:N  Ctrl-C arrives right after the item of step N got its name in the target, before the move
+                     has noted that it is there
+      term-after:N, hup-after:N  a real SIGTERM / SIGHUP is sent to the tool before step N (POSIX)
+      vanish:N       right after the item of step N got its name in the target, "another process" removes it there
+      reparse:PATH   on the Windows layout (CCD_REHOME_PLATFORM=win32), the folder at PATH counts as a reparse point
+                     (a directory junction), which POSIX cannot make (see _is_link). Listing what is inside it prints
+                     a TEST-ONLY line (see _sandbox_hooks): on Windows that would be following the junction
+      alias:PATH     the symlink at PATH is a second name of a folder that os.path.realpath does not resolve, as a
+                     bind mount, a macOS firmlink or ~/.Claude on a case-insensitive disk is (see _sandbox_hooks)
+    A step is one item moved, copied back or removed, or one memory file copied."""
+    out = {}
+    if SANDBOX:
+        for f in os.environ.get("CCD_REHOME_FAULT", "").split(","):
+            k, _, v = f.strip().partition(":")
+            if k:
+                out[k] = v
+    return out
+
+
+FAULTS = _faults()
+WALKED_INTO = "TEST-ONLY: listed inside the simulated junction"
+
+
+def _sandbox_hooks():
+    """TEST-ONLY stand-ins for what POSIX cannot make, installed only in the sandbox (FAULTS is empty elsewhere).
+    alias:PATH  os.path.realpath leaves the symlink at PATH (and every path below it) unresolved, the way it leaves a
+                bind mount, a macOS firmlink (/System/Volumes/Data/Users/...) or ~/.Claude on a case-insensitive
+                disk; os.stat, and so os.path.samefile, still sees the folder it names.
+    reparse:PATH  (the Windows layout) os.scandir of the folder at PATH or below it prints WALKED_INTO to stderr: on
+                Windows, listing a junction's contents is following it (os.walk before Python 3.12 does)."""
+    alias = FAULTS.get("alias")
+    if alias:
+        real, top = os.path.realpath, os.path.abspath(alias)
+
+        def realpath(p, *a, **k):
+            x = os.path.abspath(p)
+            return x if isinstance(x, str) and (x == top or x.startswith(top + os.sep)) else real(p, *a, **k)
+        os.path.realpath = realpath
+    junction = FAULTS.get("reparse") if WIN else None
+    if junction:
+        scandir, top2 = os.scandir, os.path.normcase(os.path.abspath(junction))
+
+        def watched(path="."):
+            x = os.path.normcase(os.path.abspath(path)) if isinstance(path, str) else ""
+            if x == top2 or x.startswith(top2 + os.sep):
+                sys.stderr.write(f"{WALKED_INTO} {x}\n")
+            return scandir(path)
+        os.scandir = watched
+
+
+_sandbox_hooks()
+STEP = [0]                  # filesystem steps of this CLI move or rollback so far (see _step)
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-ARCH_RE = re.compile(r"\d{8}T\d{6}Z-(move|rehome|adopt|unregister|pre-rollback)")
+ARCH_RE = re.compile(r"\d{8}T\d{6}Z-(move|rehome|adopt|unregister|pre-rollback|cli-move)")
 # Per-account state inside a record: claude.ai connectors and Remote Control. Meaningless (or wrong) elsewhere.
 ACCOUNT_BOUND = ("remoteMcpServersConfig", "withheldConnectorHosts", "remoteControlAutoEligible",
                  "steeredByRemoteClient", "bridgeSessionIds")
@@ -181,15 +325,79 @@ def remove(p):
         os.remove(p)
 
 
+def _glob(base, *pattern, recursive=False):
+    """glob.glob(base/pattern...) with `base` taken literally: a home, profile or archive path may itself hold
+    [ ] * or ? (e.g. ~/homes/work[1]), which glob would otherwise read as a pattern and match nothing."""
+    return glob.glob(os.path.join(glob.escape(base), *pattern), recursive=recursive)
+
+
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _reparse_point(st):
+    """Is this lstat result a Windows reparse point (a directory junction, a mount point, a symlink)? Only Windows
+    stat results have st_file_attributes, so on POSIX this is always False."""
+    return bool(getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _is_link(p):
+    """A symlink, or on Windows any reparse point. os.path.islink is False for a directory junction, Python before
+    3.12 has no os.path.isjunction, and os.walk walks into one, so a link check that saw symlinks only would let a
+    copy follow a junction out of the home. Never followed. (The self-test simulates a junction on the emulated
+    Windows layout with the test-only CCD_REHOME_FAULT=reparse:PATH.)"""
+    if os.path.islink(p):
+        return True
+    try:
+        if _reparse_point(os.lstat(p)):
+            return True
+    except OSError:
+        return False
+    v = FAULTS.get("reparse")
+    return bool(WIN and v and os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(v)))
+
+
+def _walk(top):
+    """os.walk(top), top down, that never descends into a link: a folder that is a symlink or, on Windows, a
+    directory junction or another reparse point (_is_link) is still listed among its parent's folders, so a check
+    sees it, but it is pruned from the walk BEFORE the walk would enter it. os.walk leaves a symlink alone, yet before
+    Python 3.12 it walks into a junction, so a check that only refused one after the walk had listed it would first
+    read whatever the junction leads to (a large tree, another home, a loop)."""
+    for dp, dn, fn in os.walk(top):
+        links = [n for n in dn if _is_link(os.path.join(dp, n))]
+        if links:
+            dn[:] = [n for n in dn if n not in links]
+        yield dp, dn + links, fn
+
+
+def _symlink_below(base, path):
+    """The first path from below `base` down to `path` itself that is a symlink (or, on Windows, a junction:
+    _is_link), or None. `path` is base/..."""
+    cur = base
+    for part in os.path.relpath(path, base).split(os.sep):
+        if part in ("", "."):
+            continue
+        cur = os.path.join(cur, part)
+        if _is_link(cur):
+            return cur
+    return None
+
+
+def _prefer_direct(base, paths):
+    """`paths` (under base) with the ones reached without a symlink first."""
+    return sorted(paths, key=lambda t: (_symlink_below(base, t) is not None, t))
+
+
 def records(d):
-    return sorted(glob.glob(os.path.join(d, "local_*.json"))) if d and os.path.isdir(d) else []
+    return sorted(_glob(d, "local_*.json")) if d and os.path.isdir(d) else []
 
 
 def sid_of(path): return os.path.basename(path)[:-5] if path.endswith(".json") else os.path.basename(path)
 
 
-def transcript(cli_id):
-    hits = glob.glob(os.path.join(PROJECTS, "*", f"{cli_id}.jsonl")) if cli_id else []
+def transcript(cli_id, home=None):
+    if home:
+        return transcript_in(home, cli_id)
+    hits = _prefer_direct(PROJECTS, _glob(PROJECTS, "*", glob.escape(cli_id) + ".jsonl")) if cli_id else []
     return hits[0] if hits else None
 
 
@@ -312,28 +520,123 @@ def ancestors():
 
 
 # ---------------- profiles ----------------
-def _remembered():
+def _paths_file(path):
+    """A list of paths kept in the state folder (KNOWN_PROFILES, KNOWN_ROOTS); [] when missing or unreadable."""
     try:
-        return load(KNOWN_PROFILES)
+        v = load(path)
     except (OSError, ValueError):
         return []
+    return [x for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
+
+
+def _remembered():
+    return _paths_file(KNOWN_PROFILES)
+
+
+def _in_state(p):
+    """Is p the tool's state folder or inside it? It is never a Desktop profile or a CLI home, wherever it is."""
+    return bool(p) and _holds(os.path.realpath(STATE), os.path.realpath(p), itself=True)
+
+
+_ROOTS = []
+
+
+def profile_roots():
+    """[(realpath, found_by, found_in)] of every folder whose subfolders are Desktop profiles or CLI homes:
+    ~/.claude-instances while it exists, every root added with `profiles --add-root`, and each folder in
+    $CCD_REHOME_INSTANCES. Worked out once per run."""
+    if not _ROOTS:
+        out, seen = [], set()
+
+        def add(p, by, where):
+            rp = os.path.realpath(_expand_home(p)) if p else None
+            if rp and rp not in seen and os.path.isdir(rp) and not _in_state(rp):
+                seen.add(rp); out.append((rp, by, where))
+        add(INST, "root", short(INST))
+        for r in _paths_file(KNOWN_ROOTS):
+            add(r, "root", short(os.path.realpath(r)))
+        for r in os.environ.get("CCD_REHOME_INSTANCES", "").split(os.pathsep):
+            add(r, "env", "CCD_REHOME_INSTANCES")
+        _ROOTS.append(out)
+    return _ROOTS[0]
+
+
+def _root_children(root):
+    """The subfolders of a profile root that may be a profile or a home, hidden ones included (a CLI home is often
+    called .claude-NAME): not the state folder, not a `_` name (the state folder of earlier versions,
+    ~/.claude-instances/_rehome), not a `-3p` gateway profile."""
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    return [d for d in (os.path.join(root, n) for n in names if not n.startswith("_") and not n.endswith("-3p"))
+            if os.path.isdir(d) and not _in_state(d)]
+
+
+def _in_a_root(rp):
+    return any(os.path.normcase(os.path.dirname(rp)) == os.path.normcase(r) for r, _, _ in profile_roots())
 
 
 def _remember(path):
-    """Profiles outside the standard places are found again later only because we remember them."""
-    if DRY or path == os.path.realpath(DEFAULT_PROFILE) or os.path.dirname(path) == os.path.realpath(INST):
+    """Profiles outside the standard places are found again later only because we remember them. The default
+    profile and the folders in a profile root are found anyway (and go when their root goes)."""
+    if DRY or path == os.path.realpath(DEFAULT_PROFILE) or _in_a_root(path) or _in_state(path):
         return
     known = _remembered()
     if path not in known:
         known.append(path); write_json(KNOWN_PROFILES, known, 2)
 
 
+def _is_profile_dir(p):
+    return os.path.isfile(os.path.join(p, "config.json"))
+
+
+def _plain_name(n):
+    """Can the folder name n be typed back as a bare profile name? Not `default` or `cli` (those name the default
+    profile and ~/.claude), and nothing a path or a CLI home name starts with."""
+    return bool(n) and n not in ("default", "cli") and not n.startswith((".", "~", "cli:")) and os.sep not in n \
+        and not (os.altsep and os.altsep in n)
+
+
+def _profile_name_hits(name):
+    """The folders a bare profile NAME can mean: the folder NAME in each profile root (those that are Desktop profiles
+    when any is; else every one, so that the refusal can say what it is), else every known Desktop profile (discover)
+    whose folder is called NAME. One hit is the profile; several are ambiguous."""
+    under = []
+    for root, _, _ in profile_roots():
+        d = os.path.join(root, name)
+        if os.path.isdir(d) and not _in_state(d) and os.path.realpath(d) not in under:
+            under.append(os.path.realpath(d))
+    if under:
+        return [x for x in under if _is_profile_dir(x)] or under
+    default = os.path.realpath(DEFAULT_PROFILE)
+    return [x for x in _desktop_paths() if os.path.basename(x) == name and x != default]
+
+
+def resolve_profile_name(name):
+    """The path of the Desktop profile a bare NAME means (_profile_name_hits): exactly one, or a refusal."""
+    hits = _profile_name_hits(name)
+    if len(hits) > 1:
+        die(f"`{name}` is ambiguous: {len(hits)} Desktop profiles have that folder name: "
+            f"{', '.join(short(x) for x in hits)}. Name the one you mean by its path")
+    if not hits:
+        roots = ", ".join(short(r) for r, _, _ in profile_roots())
+        die(f"{name} does not exist: no folder of that name in " + (roots or "a profile root (there is none)") +
+            ", and no known Desktop profile has that folder name. Name it by its path, or register it: "
+            "`ccd-rehome profiles --add PATH` (`ccd-rehome profiles` lists every profile)")
+    return hits[0]
+
+
 def name_for(path):
+    """How a Desktop profile is printed: `default`; the folder name of one in a profile root when that name, typed
+    back, means it and nothing else (_profile_name_hits); else its path. So every printed name runs as printed, and
+    a name never changes with where else the profile was found."""
     rp = os.path.realpath(path)
     if rp == os.path.realpath(DEFAULT_PROFILE):
         return "default"
-    if os.path.dirname(rp) == os.path.realpath(INST):
-        return os.path.basename(rp)
+    n = os.path.basename(rp)
+    if _plain_name(n) and _in_a_root(rp) and _profile_name_hits(n) == [rp]:
+        return n
     return short(rp)
 
 
@@ -344,7 +647,7 @@ class Profile:
         elif os.sep in spec or (os.altsep and os.altsep in spec) or spec.startswith((".", "~")):
             path = os.path.abspath(HOME + spec[1:] if spec.startswith("~") else spec)
         else:
-            path = os.path.join(INST, spec)
+            path = resolve_profile_name(spec)
         self.path = os.path.realpath(path)
         self.name = name_for(self.path)
         if self.path.endswith("-3p"):
@@ -352,11 +655,17 @@ class Profile:
         if not os.path.isdir(self.path):
             die(f"{self.path} does not exist")
         if not os.path.exists(os.path.join(self.path, "config.json")):
+            if is_cli_home(self.path):
+                die(f"{short(self.path)} is a CLI home (a Claude Code config dir), not a Desktop profile: name it by "
+                    f"its path, or as cli:NAME")
             die(f"{self.path} is not a Desktop profile (no config.json). Launch it once: "
                 f"claude-desktop --user-data-dir={self.path}")
-        # archive key: plain name for default / ~/.claude-instances, a stable slug for any other path
-        self.key = self.name if os.sep not in self.name else \
-            "path-" + re.sub(r"[^A-Za-z0-9._-]+", "_", self.name.lstrip("~").strip("/\\")) + "-" + \
+        # archive key: plain name for default and for ~/.claude-instances/NAME (the folder name, as in every version
+        # before), a stable slug of the path for any other folder, a profile root's included: its key is the one the
+        # path always had, and two folders of the same name never share one
+        self.key = os.path.basename(self.path) if os.path.dirname(self.path) == os.path.realpath(INST) else \
+            "default" if self.name == "default" else \
+            "path-" + re.sub(r"[^A-Za-z0-9._-]+", "_", short(self.path).lstrip("~").strip("/\\")) + "-" + \
             hashlib.sha1(self.path.encode()).hexdigest()[:6]
         _remember(self.path)
 
@@ -443,7 +752,7 @@ class Profile:
         """(dir, shared). Linux/Windows: <profile>/logs. macOS: ~/Library/Logs/Claude, possibly shared by all
         instances, so only path-bearing lines can be attributed to one profile there."""
         own = os.path.join(self.path, "logs")
-        if glob.glob(os.path.join(own, "main*.log")):
+        if _glob(own, "main*.log"):
             return own, False
         if MAC and os.path.isdir(MAC_LOGS):
             return MAC_LOGS, True
@@ -455,7 +764,7 @@ class Profile:
             return _LOG_CACHE[key]
         rx = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\S* " + pattern)
         out = []
-        for log in glob.glob(os.path.join(self.log_dir()[0], "main*.log")):
+        for log in _glob(self.log_dir()[0], "main*.log"):
             try:
                 with open(log, encoding="utf-8", errors="replace") as f:
                     for line in f:
@@ -544,7 +853,7 @@ class Profile:
         orgs = [o for _, a, o in self.real_inits() if a == acct]
         if orgs:
             why.append("this profile's log"); return orgs[-1]
-        here = [os.path.basename(d) for d in glob.glob(os.path.join(self.store(), acct, "*")) if os.path.isdir(d)]
+        here = [os.path.basename(d) for d in _glob(os.path.join(self.store(), acct), "*") if os.path.isdir(d)]
         if len(here) == 1:
             why.append("its only org dir in this profile"); return here[0]
         known = [o for o in ((reg or {}).get(acct) or {}).get("orgs", {})]
@@ -557,37 +866,776 @@ class Profile:
         return None
 
     def dirs(self, kind="code"):
-        return sorted(d for d in glob.glob(os.path.join(self.store(kind), "*", "*"))
+        return sorted(d for d in _glob(self.store(kind), "*", "*")
                       if os.path.isdir(d) and os.path.basename(os.path.dirname(d)) != "skills-plugin")
 
 
+FOUND = {}       # realpath -> (found_by, found_in): where discovery first found each Desktop profile and CLI home
+
+
+def _found(rp):
+    by, where = FOUND.get(rp, (None, None))
+    return {"found_by": by, "found_in": where}
+
+
+def _found_text(rp):
+    by, where = FOUND.get(rp, (None, None))
+    return " ".join(x for x in ((by or "named").replace("-", " "), where) if x)
+
+
+def _shell_texts():
+    """(file shown as ~/..., its text) of every shell startup file in SHELL_FILES that can be read."""
+    out = []
+    for rel in SHELL_FILES:
+        try:
+            with open(os.path.join(HOME, rel), encoding="utf-8", errors="replace") as f:
+                out.append((short(os.path.join(HOME, rel)), f.read()))
+        except OSError:
+            continue
+    return out
+
+
+def shell_user_data_dirs(text):
+    """The --user-data-dir values a shell startup file gives the Desktop app, expanded (a leading ~, $HOME, ${HOME}):
+    `--user-data-dir=PATH` or `--user-data-dir PATH` at the start of a word, after claude-desktop,
+    claude-desktop-unofficial or Claude on the same line (DESKTOP_CMD_RE). Comments are skipped, and so is a relative
+    path (relative to wherever that shell runs)."""
+    out = []
+    for line in text.splitlines():
+        code = _shell_code(line)
+        for m in USER_DATA_DIR_RE.finditer(code):
+            if not DESKTOP_CMD_RE.search(code[:m.start()]):
+                continue
+            v = _expand_home(next(g for g in m.groups() if g is not None))
+            if os.path.isabs(v):
+                out.append(v)
+    return out
+
+
+def mac_log_profiles():
+    """(profile path, log shown as ~/...) of each profile that Desktop's shared macOS log (~/Library/Logs/Claude/
+    main*.log) names in a `Loaded N persisted sessions from <profile>/claude-code-sessions/<acct>/<org>` line. Every
+    instance logs there, so a profile started by hand once is found again from it."""
+    out, seen = [], set()
+    rx = re.compile(r"Loaded \d+ persisted sessions from (.+?)\s*$")
+    store = re.compile(r"(.+)[/\\](?:" + "|".join(re.escape(x) for x in STORES.values()) + r")(?:[/\\].*)?$")
+    for log in _glob(MAC_LOGS, "main*.log"):
+        try:
+            with open(log, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if "persisted sessions from " not in line:
+                        continue
+                    m = rx.search(line)
+                    m2 = store.match(m.group(1)) if m else None
+                    if m2 and m2.group(1) not in seen:
+                        seen.add(m2.group(1)); out.append((m2.group(1), short(log)))
+        except OSError:
+            continue
+    return out
+
+
 def discover():
-    """Every Desktop profile on this host we can find. Returns realpaths (default first)."""
+    """Every Desktop profile on this host we can find. Returns realpaths (default first). FOUND says where each was
+    found first: the default profile, a profile root (~/.claude-instances while it exists, an added root,
+    $CCD_REHOME_INSTANCES), a running Desktop, a .desktop launcher, a shell startup file, Desktop's shared macOS log,
+    a path added or named before, $CCD_REHOME_PROFILES. Only folders that exist and are Desktop profiles (config.json)
+    count, never a -3p gateway profile or the tool's state folder."""
     found = []
-    def add(p):
-        if p and os.path.isdir(p) and os.path.exists(os.path.join(p, "config.json")) and not p.endswith("-3p"):
+
+    def add(p, by, where=None):
+        if p and os.path.isdir(p) and os.path.exists(os.path.join(p, "config.json")) and not p.endswith("-3p") \
+                and not _in_state(p):
             rp = os.path.realpath(p)
             if rp not in found:
-                found.append(rp)
-    add(DEFAULT_PROFILE)
-    for d in sorted(glob.glob(os.path.join(INST, "*"))):
-        if not os.path.basename(d).startswith("_"):
-            add(d)
+                found.append(rp); FOUND.setdefault(rp, (by, where))
+    add(DEFAULT_PROFILE, "default")
+    for root, by, where in profile_roots():
+        for d in _root_children(root):
+            add(d, by, where)
+    launchers = _glob(os.path.join(HOME, ".local", "share", "applications"), "*.desktop")
     if not SANDBOX:
         for pid in _pids():
             a = _argv(pid)
             if a and (_is_desktop(a) or "claude-desktop" in a[0]):
-                add(_udd(pid, a))
-        for f in glob.glob(os.path.join(HOME, ".local", "share", "applications", "*.desktop")) + \
-                glob.glob("/usr/share/applications/*.desktop"):
-            try:
-                for m in re.finditer(r"--user-data-dir=(\"[^\"]+\"|'[^']+'|\S+)", open(f, encoding="utf-8", errors="replace").read()):
-                    add(os.path.expanduser(m.group(1).strip("'\"").replace("$HOME", HOME)))
-            except OSError:
-                pass
-    for p in _remembered() + [x for x in os.environ.get("CCD_REHOME_PROFILES", "").split(os.pathsep) if x]:
-        add(os.path.expanduser(p))
+                add(_udd(pid, a), "running")
+        launchers += glob.glob("/usr/share/applications/*.desktop")
+    for f in launchers:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            for m in re.finditer(r"--user-data-dir=(\"[^\"]+\"|'[^']+'|\S+)", text):
+                add(os.path.expanduser(m.group(1).strip("'\"").replace("$HOME", HOME)), "launcher", short(f))
+        except OSError:
+            pass
+    for shown, text in _shell_texts():
+        for v in shell_user_data_dirs(text):
+            add(v, "shell-file", shown)
+    if MAC:
+        for v, shown in mac_log_profiles():
+            add(v, "log", shown)
+    for p in _remembered():
+        add(os.path.expanduser(p), "added")
+    for p in [x for x in os.environ.get("CCD_REHOME_PROFILES", "").split(os.pathsep) if x]:
+        add(os.path.expanduser(p), "env", "CCD_REHOME_PROFILES")
     return found
+
+
+# ---------------- CLI homes (Claude Code config dirs) ----------------
+def _has_cli_markers(rp):
+    return any(os.path.exists(os.path.join(rp, n))
+               for n in ("projects", ".claude.json", ".credentials.json", "settings.json"))
+
+
+_DESKTOP_PATHS = []
+
+
+def _desktop_paths():
+    """Every Desktop profile discover() finds, worked out once per run (it reads a few files and one process
+    snapshot)."""
+    if not _DESKTOP_PATHS:
+        _DESKTOP_PATHS.append(discover())
+    return _DESKTOP_PATHS[0]
+
+
+def _same_dir(a, b):
+    """Are a and b the same folder? By identity (os.path.samefile: st_dev and st_ino), not by name: a folder can have
+    a second name that os.path.realpath does not resolve (a bind mount, a macOS firmlink such as
+    /System/Volumes/Data/Users/..., ~/.Claude for ~/.claude on a case-insensitive disk). When either cannot be
+    stat'ed (it is gone, say), by normalised realpath."""
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def _is_default_home(path):
+    """Is `path` ~/.claude, by whatever name (_same_dir)?"""
+    return bool(path) and _same_dir(path, CLI_DEFAULT)
+
+
+def _home_path(path):
+    """The path a CLI home goes by: its realpath, except that any name of ~/.claude becomes the realpath of
+    ~/.claude itself, so that every rule that recognises the default home by its path sees it, and the tool never
+    takes (or remembers) a second name of it for a home of its own."""
+    rp = os.path.realpath(path)
+    return os.path.realpath(CLI_DEFAULT) if _is_default_home(rp) else rp
+
+
+def _holds(a, b, itself=False):
+    """True when folder a is above folder b (or, with itself=True, is b). Realpaths."""
+    a, b = os.path.normcase(a), os.path.normcase(b)
+    return (itself and a == b) or b.startswith(a.rstrip(os.sep) + os.sep)
+
+
+def not_a_cli_home(rp):
+    """Why the folder at realpath `rp` can never be a CLI home, else None. HOME keeps the default home's own
+    .claude.json, so it would pass the marker test (and a move into it would scatter projects/ and tasks/ across the
+    home folder); the folders above ~/.claude, ~/.claude-instances and every Desktop profile are no config dirs.
+    ~/.claude itself always is one (even with a Desktop profile kept inside it). Both are recognised by identity
+    (_same_dir), whatever name `rp` gives them."""
+    if _is_default_home(rp):
+        return None
+    if _same_dir(rp, HOME):
+        return "is your home folder (it holds ~/.claude and ~/.claude.json)"
+    if _holds(rp, os.path.realpath(CLI_DEFAULT)):
+        return f"is a folder above {short(CLI_DEFAULT)}"
+    if _holds(rp, os.path.realpath(INST), itself=True):
+        return f"is or holds {short(INST)}, where the Desktop profiles live"
+    if _in_state(rp):
+        return f"is the tool's state folder {short(os.path.realpath(STATE))} (or inside it)"
+    p = next((x for x in _desktop_paths() if _holds(rp, x, itself=True)), None)
+    return f"is or holds the Desktop profile {short(p)}" if p else None
+
+
+def is_cli_home(path):
+    """A Claude Code config dir: has one of its markers, is not a Desktop profile (those have config.json), and is
+    not HOME or a folder above a home or a profile (not_a_cli_home)."""
+    if not path or not os.path.isdir(path):
+        return False
+    rp = os.path.realpath(path)
+    if os.path.exists(os.path.join(rp, "config.json")):
+        return False
+    return _has_cli_markers(rp) and not not_a_cli_home(rp)
+
+
+def global_config(path):
+    """A CLI home's .claude.json: the default home keeps it NEXT TO ~/.claude, every other home inside it."""
+    rp = _home_path(path)
+    return os.path.join(HOME, ".claude.json") if rp == os.path.realpath(CLI_DEFAULT) \
+        else os.path.join(rp, ".claude.json")
+
+
+def _expand_home(v):
+    v = (v or "").replace("${HOME}", HOME).replace("$HOME", HOME)
+    if v == "~" or v.startswith("~" + os.sep) or v.startswith("~/"):
+        v = HOME + v[1:]                     # the tool's HOME (CCD_REHOME_HOME-aware), not the process's
+    return os.path.expanduser(v)
+
+
+def _expand_config_dir(v):
+    v = _expand_home(v)
+    return v if os.path.isabs(v) else os.path.join(HOME, v)
+
+
+def _shell_code(line):
+    """A shell line without its comment: from an unquoted `#` that starts a word to the end of the line."""
+    quote, i = None, 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            if c == quote:
+                quote = None
+            elif c == "\\" and quote == '"':
+                i += 1
+        elif c == "\\":
+            i += 1
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i]
+        i += 1
+    return line
+
+
+def shell_config_dirs(text):
+    """The CLAUDE_CONFIG_DIR= values a shell startup file assigns, expanded (a leading ~, $HOME, ${HOME}). Comments
+    are skipped, and so is a relative path: it is relative to wherever that shell happens to run."""
+    out = []
+    for line in text.splitlines():
+        for m in CLAUDE_CONFIG_DIR_RE.finditer(_shell_code(line)):
+            v = _expand_home(next(g for g in m.groups() if g is not None))
+            if os.path.isabs(v):
+                out.append(v)
+    return out
+
+
+def _cli_home_paths():
+    """Every Claude Code config dir on this host, as realpaths (any name of ~/.claude is ~/.claude: _home_path),
+    default first; FOUND says where each was found first: ~/.claude and ~/.claude-* / ~/.claude_* (default), a
+    profile root's subfolders (root, or env for $CCD_REHOME_INSTANCES), a shell startup file, this process's
+    CLAUDE_CONFIG_DIR and $CCD_REHOME_CLI_HOMES (env), a path added or named before (added)."""
+    found, seen = [], set()
+
+    def add(p, by, where=None):
+        if not p:
+            return
+        rp = _home_path(_expand_config_dir(p))
+        if rp not in seen and not _in_state(rp) and is_cli_home(rp):
+            seen.add(rp); found.append(rp); FOUND.setdefault(rp, (by, where))
+
+    add(CLI_DEFAULT, "default")
+    for d in sorted(_glob(HOME, ".claude-*") + _glob(HOME, ".claude_*")):
+        if os.path.realpath(d) != os.path.realpath(INST):
+            add(d, "default")
+    for root, by, where in profile_roots():
+        for d in _root_children(root):
+            add(d, by, where)
+    for shown, text in _shell_texts():
+        for v in shell_config_dirs(text):
+            add(v, "shell-file", shown)
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        add(os.environ["CLAUDE_CONFIG_DIR"], "env", "CLAUDE_CONFIG_DIR")
+    for p in os.environ.get("CCD_REHOME_CLI_HOMES", "").split(os.pathsep):
+        if p:
+            add(p, "env", "CCD_REHOME_CLI_HOMES")
+    for p in _remembered():
+        add(p, "added")
+    return found
+
+
+def discover_cli_homes():
+    """Every Claude Code config dir on this host (_cli_home_paths), as CliHome objects."""
+    return [CliHome(p) for p in _cli_home_paths()]       # not remembered: a home found here goes with what named it
+
+
+def live_entries(path):
+    """The LIVE `sessions/<pid>.json` registry entries of a CLI home. Never reads sessions/*.key."""
+    out = []
+    if SANDBOX:
+        alive = {int(x) for x in os.environ.get("CCD_REHOME_LIVE_PIDS", "").split(",") if x.strip().isdigit()}
+    else:
+        alive = None
+    for f in sorted(_glob(path, "sessions", "*.json")):
+        try:
+            d = load(f)
+            if not isinstance(d, dict):          # null, [], a string: a truncated or foreign write
+                continue
+            pid = int(d.get("pid"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if (pid in alive) if alive is not None else _alive(pid):
+            out.append(d)
+    return out
+
+
+def transcript_in(home_path, cli_id):
+    if not cli_id:
+        return None
+    hits = _prefer_direct(home_path, _glob(home_path, "projects", "*", glob.escape(cli_id) + ".jsonl"))
+    return hits[0] if hits else None
+
+
+def _cli_transcripts(path):
+    """Every projects/<key>/*.jsonl of the CLI home at `path`, once per real file: a transcript reached under a
+    second key through a symlinked project folder (the usual alias after renaming a repo) is listed once, by the
+    path that has no symlink in it when there is one."""
+    best = {}
+    for t in _prefer_direct(path, _glob(path, "projects", "*", "*.jsonl")):
+        best.setdefault(os.path.realpath(t), t)
+    return sorted(best.values())
+
+
+def transcript_scan(path):
+    """cwd, title and last entrypoint of a transcript: the first HEAD_LINES lines and the last TAIL_BYTES, never the
+    whole file. `entrypoint` is that of its most recent record that has one (`claude-desktop` for a turn in Claude
+    Desktop, `cli` or `sdk-cli` for the terminal: mechanics.md §4a), which decides its retention (retention).
+    It is None when no record read has one, or when the tail holds none and the middle of the file was not read."""
+    state = {"cwd": None, "custom": None, "summary": None, "entry": None, "tail_entry": None}
+
+    def take(raw, tail=False):
+        try:
+            d = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            return
+        if not isinstance(d, dict):
+            return
+        if d.get("cwd"):
+            state["cwd"] = d["cwd"]
+        if isinstance(d.get("entrypoint"), str) and d["entrypoint"]:
+            state["entry"] = d["entrypoint"]
+            if tail:
+                state["tail_entry"] = d["entrypoint"]
+        if d.get("type") == "custom-title" and d.get("customTitle"):
+            state["custom"] = d["customTitle"]
+        elif d.get("type") == "summary" and d.get("summary"):
+            state["summary"] = d["summary"]
+
+    gap = False                                      # True when the middle of the file was not read
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):     # a FIFO named <id>.jsonl would wait for a writer for ever
+            raise OSError(errno.EINVAL, "not a regular file")
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            pos = 0
+            for _ in range(HEAD_LINES):
+                line = f.readline()
+                if not line:
+                    break
+                pos += len(line); take(line)
+            if pos < size:
+                start = max(pos, size - TAIL_BYTES)
+                f.seek(start)
+                if start > pos:
+                    gap = True
+                    f.readline()                     # drop the partial first line of the tail
+                for line in f:
+                    take(line, tail=True)
+    except OSError:
+        pass
+    return {"cwd": state["cwd"], "title": state["custom"] or state["summary"],
+            "entrypoint": state["tail_entry"] if gap else state["entry"]}
+
+
+def cleanup_days(path):
+    try:
+        return int(load(os.path.join(path, "settings.json")).get("cleanupPeriodDays", 30))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 30
+
+
+DESKTOP_ENTRYPOINT = "claude-desktop"       # the entrypoint of a turn in Claude Desktop (mechanics.md §4a)
+DESKTOP_RULE_VERSION = "2.1.248"            # the first Claude Code that keeps a Desktop transcript at any age (§4b)
+
+
+def _whole_days(v):
+    """A settings value as a whole number of days (1 or more), or None when it is not one: Claude Code pauses its
+    cleanup on such a settings error (mechanics.md §4b, "Retention")."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        v = int(v)
+    except (ValueError, TypeError):
+        return None
+    return v if v >= 1 else None
+
+
+def desktop_cleanup_days(path):
+    """desktopSessionCleanupPeriodDays from the CLI home's settings.json, or None when it sets none (or a value that
+    is not a whole number of days, 1 or more)."""
+    try:
+        return _whole_days(load(os.path.join(path, "settings.json")).get("desktopSessionCleanupPeriodDays"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def managed_settings_dir():
+    """The folder of the file-based managed settings of this OS, where Claude Code's documentation puts them
+    (mechanics.md §4b, "Managed settings"). In the sandbox the same path under CCD_REHOME_HOME, so the self-test can
+    make one."""
+    parts = (("Library", "Application Support", "ClaudeCode") if MAC else ("Program Files", "ClaudeCode") if WIN
+             else ("etc", "claude-code"))
+    if SANDBOX:
+        return os.path.join(HOME, *parts)
+    return "C:\\Program Files\\ClaudeCode" if WIN else "/" + "/".join(parts)
+
+
+def _managed_file(name):
+    """`name` in managed_settings_dir(), with the Windows separator on Windows (outside the sandbox)."""
+    return managed_settings_dir() + "\\" + name if WIN and not SANDBOX else os.path.join(managed_settings_dir(), name)
+
+
+def managed_settings_path():
+    return _managed_file("managed-settings.json")
+
+
+def managed_sources(path):
+    """(label, file) of each managed source the tool reads for the CLI home at `path`: the server-managed settings
+    Claude Code caches in <home>/remote-settings.json, the file-based managed-settings.json, and each *.json drop-in
+    of the managed-settings.d/ folder next to it, in alphabetical order (a hidden file is skipped, as Claude Code
+    skips it). MDM (the macOS plist, the Windows registry) is not read."""
+    rs, mf = os.path.join(path, "remote-settings.json"), managed_settings_path()
+    drop = _managed_file("managed-settings.d")
+    try:
+        names = sorted(n for n in os.listdir(drop) if n.endswith(".json") and not n.startswith("."))
+    except OSError:                          # none, not a folder, or not readable
+        names = []
+    return [(f"the server-managed settings {short(rs)}", rs), (f"the managed settings {short(mf)}", mf)] + \
+        [(f"the managed settings {short(os.path.join(drop, n))}", os.path.join(drop, n)) for n in names]
+
+
+def managed_values(path, key):
+    """[(days, label)] of every managed source that sets `key` to a whole number of days, in managed_sources' order.
+    Which of them Claude Code applies depends on how it combines its sources ("first-wins" by default, drop-ins
+    merged after the file); the tool does not model that (retention takes the shortest)."""
+    out = []
+    for label, f in managed_sources(path):
+        if not os.path.isfile(f):            # never opened unless a regular file: a FIFO would wait for a writer
+            continue
+        try:
+            d = load(f)
+        except (OSError, ValueError):
+            continue
+        v = _whole_days(d.get(key)) if isinstance(d, dict) else None
+        if v:
+            out.append((v, label))
+    return out
+
+
+def _shortest(values):
+    """The (days, where) with the fewest days, the first of them on a tie; (None, None) when there is none."""
+    return min(values, key=lambda r: r[0]) if values else (None, None)
+
+
+def retention(path):
+    """How the CLI home at `path` ages out a transcript (mechanics.md §4b, "Retention" and "Managed settings").
+    `rule(entrypoint)` gives (days, setting, where it is set), or (None, None, None) for no age limit, from the
+    entrypoint of the transcript's most recent records (transcript_scan): Claude Code 2.1.248 and later keep the
+    transcript of a session most recently continued in Claude Desktop (or Cowork) at any age, unless
+    desktopSessionCleanupPeriodDays sets a limit; any other transcript, and a Desktop one wherever managed settings
+    set cleanupPeriodDays, is deleted after cleanupPeriodDays. An unknown entrypoint gets cleanupPeriodDays, the rule
+    that warns. Each setting is the SHORTEST value that the home's settings.json (cleanupPeriodDays: 30 when it sets
+    none), its remote-settings.json, managed-settings.json or a managed-settings.d/ drop-in sets, on purpose: Claude
+    Code applies one of them, and the shortest makes the tool warn wherever Claude Code could delete the transcript
+    (more often than it would, never less). A managed value comes first on a tie. `cleanup` is (cleanupPeriodDays,
+    where): what Claude Code before 2.1.248 applies to a Desktop transcript too; `managed_cleanup` is the shortest
+    managed cleanupPeriodDays, or None."""
+    name = cli_home_name(path)
+    mc = managed_values(path, "cleanupPeriodDays")
+    hd = desktop_cleanup_days(path)
+    cdays, cwhere = _shortest(mc + [(cleanup_days(path), name)])
+    ddays, dwhere = _shortest(managed_values(path, "desktopSessionCleanupPeriodDays") + ([(hd, name)] if hd else []))
+    mcd, mcw = _shortest(mc)
+
+    def rule(entrypoint):
+        if entrypoint != DESKTOP_ENTRYPOINT:
+            return cdays, "cleanupPeriodDays", cwhere
+        rules = ([(mcd, "cleanupPeriodDays", mcw)] if mcd else []) + \
+                ([(ddays, "desktopSessionCleanupPeriodDays", dwhere)] if ddays else [])
+        return min(rules, key=lambda r: r[0]) if rules else (None, None, None)
+    return {"rule": rule, "cleanup": (cdays, cwhere), "managed_cleanup": (mcd, mcw) if mcd else None,
+            "desktop": (ddays, dwhere)}
+
+
+_CLAUDE_VERSION = []
+
+
+def claude_version():
+    """(executable, version, why) of the terminal Claude Code on PATH, from `claude --version`, read once per run.
+    version is None when it is not known, and `why` then says why."""
+    if not _CLAUDE_VERSION:
+        exe, have, why = shutil.which("claude"), None, None
+        if exe:
+            try:
+                m = re.search(r"\d+\.\d+\.\d+", subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                                               timeout=20).stdout or "")
+                have = m.group(0) if m else None
+            except (OSError, subprocess.SubprocessError):
+                have = None
+        if not have:
+            why = "`claude --version` printed no version" if exe else "no `claude` on PATH"
+        _CLAUDE_VERSION.append((exe, have, why))
+    return _CLAUDE_VERSION[0]
+
+
+def login_file(path):
+    """The CLI home's .credentials.json: "present" (non-empty), "empty" or "missing". Existence and size only: the
+    file is never opened."""
+    p = os.path.join(path, ".credentials.json")
+    try:
+        if not os.path.exists(p):
+            return "missing"
+        return "present" if os.path.getsize(p) > 0 else "empty"
+    except OSError:
+        return "missing"
+
+
+def login_note(path):
+    """Why a CLI home without a login reads as not signed in, for a message: no login file, or an empty one."""
+    return "its login file .credentials.json is empty" if login_file(path) == "empty" else "no login file"
+
+
+def _desktop_shadow(spec):
+    """The Desktop profile that the CLI home name `spec` also fits, or None. Only the bare `cli` can: a Desktop
+    profile `cli` in a profile root (~/.claude-instances/cli, say: it has config.json) is named `cli` too. `cli:NAME`
+    fits no Desktop profile: the one in a root's cli-NAME is named `cli-NAME`, and Profile never reads `cli:NAME` as
+    that folder."""
+    if spec != "cli":
+        return None
+    return next((os.path.join(r, "cli") for r, _, _ in profile_roots() if _is_profile_dir(os.path.join(r, "cli"))),
+                None)
+
+
+def _cli_short_name(path):
+    """`cli` for ~/.claude, `cli:NAME` for ~/.claude-NAME, else None (a home anywhere else goes by its path)."""
+    rp = _home_path(path)
+    base = os.path.basename(rp)
+    if rp == os.path.realpath(CLI_DEFAULT):
+        return "cli"
+    if os.path.dirname(rp) == os.path.realpath(HOME) and base.startswith(".claude-"):
+        return "cli:" + base[len(".claude-"):]
+    return None
+
+
+def cli_home_name(path):
+    """How the tool names a CLI home in its output: `cli`, `cli:NAME`, or the shortened path. The path is also used
+    for ~/.claude while a Desktop profile named `cli` exists (cli_spec_path refuses that name), so the name printed
+    in a command still works when typed back."""
+    n = _cli_short_name(path)
+    return n if n and not _desktop_shadow(n) else short(_home_path(path))
+
+
+class CliHome:
+    """A Claude Code config dir, `CLAUDE_CONFIG_DIR=<path>`."""
+
+    def __init__(self, path, remember=False):
+        """remember=True only for a home named on the command line: a discovered one is found again by whatever
+        named it (a shell startup file, the environment), and is forgotten when that goes."""
+        # Any name of ~/.claude is ~/.claude (_home_path): `default`, the move and rollback rules, the name and the
+        # remembered path all see the one folder, whatever path named it.
+        self.path = _home_path(os.path.expanduser(path))
+        self.global_config = global_config(self.path)
+        why = not_a_cli_home(self.path)
+        if why:
+            shown = "~" if os.path.normcase(self.path) == os.path.normcase(os.path.realpath(HOME)) else short(self.path)
+            die(f"{shown} {why}: it is not a Claude Code config dir. Name the config dir itself: `cli` (~/.claude), "
+                f"`cli:NAME` (~/.claude-NAME) or the path of one")
+        if not is_cli_home(self.path):
+            die(f"{short(self.path)} is not a Claude Code config dir (no projects/, .claude.json, "
+                f".credentials.json or settings.json), or it is a Desktop profile")
+        self.default = self.path == os.path.realpath(CLI_DEFAULT)    # no CLAUDE_CONFIG_DIR needed to use it
+        self.name = cli_home_name(self.path)
+        n = _cli_short_name(self.path)         # the archive key does not change when a Desktop profile shadows `cli`
+        self.key = "cli" if n == "cli" else "cli-" + n[4:] if n else \
+            "path-" + re.sub(r"[^A-Za-z0-9._-]+", "_", self.name.lstrip("~").strip("/\\")) + "-" + \
+            hashlib.sha1(self.path.encode()).hexdigest()[:6]
+        if remember:
+            _remember(self.path)
+
+    def account(self):
+        """(account uuid, email, org uuid, org name) from its .claude.json, or None when unknown."""
+        try:
+            oa = load(self.global_config).get("oauthAccount") or {}
+        except (OSError, ValueError, AttributeError):
+            return None
+        if not oa.get("accountUuid"):
+            return None
+        return oa.get("accountUuid"), oa.get("emailAddress"), oa.get("organizationUuid"), oa.get("organizationName")
+
+    def signed_in(self):
+        """A non-empty .credentials.json means signed in. An empty or missing one holds no login: signed out on
+        Linux and Windows, UNKNOWN on macOS (the login is in the Keychain there). Uses existence and size only
+        (login_file): the file is never opened."""
+        if login_file(self.path) == "present":
+            return "signed-in"
+        return "unknown" if MAC else "signed-out"
+
+    def sessions(self):
+        """Every projects/*/<uuid>.jsonl transcript, newest first, with the folder and title its records give."""
+        out = []
+        for t in _cli_transcripts(self.path):
+            sid = os.path.basename(t)[:-6]
+            if not re.fullmatch(UUID, sid):
+                continue
+            try:
+                st = os.stat(t)
+            except OSError:
+                continue
+            try:
+                mtime = st.st_mtime
+            except OSError:
+                continue
+            info = transcript_scan(t)
+            out.append({"id": sid, "path": t, "key": os.path.basename(os.path.dirname(t)),
+                        "mtime": mtime, "size": st.st_size, "cwd": info["cwd"], "title": info["title"],
+                        "entrypoint": info["entrypoint"]})
+        out.sort(key=lambda r: r["mtime"], reverse=True)
+        return out
+
+    def live(self):
+        return live_entries(self.path)
+
+
+def cli_spec_path(spec):
+    """`cli` -> ~/.claude; `cli:NAME` -> ~/.claude-NAME, else the one known CLI home (_cli_home_paths) whose folder
+    is called NAME or .claude-NAME (several: refused, with their paths); else None. Refuses `cli` while a Desktop
+    profile in a profile root is named `cli` too (~/.claude-instances/cli): which one was meant cannot be told, so ask
+    for a path."""
+    if spec == "cli":
+        path = CLI_DEFAULT
+    elif spec.startswith("cli:"):
+        name = spec[4:]
+        if not name or os.sep in name or (os.altsep and os.altsep in name) or ":" in name:
+            die(f"bad CLI home name {spec!r}; use `cli` or `cli:NAME`")
+        path = os.path.join(HOME, ".claude-" + name)
+        if not is_cli_home(path):
+            hits = [h for h in _cli_home_paths() if os.path.basename(h) in (name, ".claude-" + name)
+                    and not _is_default_home(h)]
+            if len(hits) > 1:
+                die(f"`{spec}` is ambiguous: {len(hits)} CLI homes have the folder name {name} or .claude-{name}: "
+                    f"{', '.join(short(h) for h in hits)}. Name the one you mean by its path")
+            if hits:
+                path = hits[0]
+    else:
+        return None
+    inst = _desktop_shadow(spec)
+    if inst:
+        die(f"`{spec}` is ambiguous here: it names the CLI home {short(path)}, and the Desktop profile {short(inst)} "
+            f"has the matching name `{os.path.basename(inst)}`. Name the one you mean by its path: {short(path)} for "
+            f"the CLI home, {short(inst)} for the Desktop profile")
+    return path
+
+
+def as_cli_home(spec):
+    """A CliHome when the spec (or path) names a CLI home, else None (so Desktop Profile handles it)."""
+    p = cli_spec_path(spec)
+    explicit = p is not None
+    if p is None:
+        if not (os.sep in spec or (os.altsep and os.altsep in spec) or spec.startswith((".", "~"))):
+            return None
+        p = os.path.abspath(HOME + spec[1:] if spec.startswith("~") else spec)
+    # A folder that looks like a CLI home but cannot be one (HOME, ~/.claude-instances, ...) is refused by CliHome,
+    # with the reason, rather than handed to Profile, which would only say it is no Desktop profile.
+    if explicit or (os.path.isdir(p) and not os.path.exists(os.path.join(p, "config.json"))
+                    and _has_cli_markers(os.path.realpath(p))):
+        return CliHome(p, remember=True)
+    return None
+
+
+def resolve_target(spec):
+    h = as_cli_home(spec)
+    return h if h is not None else Profile(spec)
+
+
+def _homes_with(homes, h):
+    return homes if any(x.path == h.path for x in homes) else homes + [h]
+
+
+def profile_cli_home(p, homes=None):
+    """(name, path) of the CLI home a Desktop profile's records point at: ~/.claude, unless NONE of its records'
+    transcripts is in ~/.claude and some are in another known home (then the home holding most of them; the first in
+    discovery order on a tie). A DISPLAY HINT ONLY: the `desktop:` flag of `sessions <CLI home>`, the note in
+    `sessions PROFILE`, and notes in register and resume-cli. It decides nothing. Desktop reads
+    CLAUDE_CONFIG_DIR ?? ~/.claude, nothing on disk says whether a window was started with CLAUDE_CONFIG_DIR, and
+    where a profile's old transcripts happen to be is fooled by a backup copy of ~/.claude (retention deletes them
+    from ~/.claude, the backup keeps them). So every rule (move, rollback, register) takes each Desktop profile to
+    read ~/.claude, Desktop's default."""
+    homes = homes if homes is not None else discover_cli_homes()
+    default_path = os.path.realpath(CLI_DEFAULT)
+    ids = [rec.get("cliSessionId") for _, _, _, _, rec in inventory(p, {}) if rec and rec.get("cliSessionId")]
+    in_default = {os.path.basename(t)[:-6] for t in _cli_transcripts(default_path)}
+    if not any(c in in_default for c in ids):
+        others = [h for h in homes if h.path != default_path]
+        index = {h.path: {os.path.basename(t)[:-6] for t in _cli_transcripts(h.path)} for h in others}
+        counts = {}
+        for cid in ids:
+            for h in others:
+                if cid in index[h.path]:
+                    counts[h.path] = counts.get(h.path, 0) + 1
+                    break
+        best = None
+        for h in others:
+            if counts.get(h.path, 0) > (counts.get(best.path, 0) if best else 0):
+                best = h
+        if best is not None:
+            return best.name, best.path
+    return cli_home_name(default_path), default_path
+
+
+def find_cli_transcript(cli_id, homes):
+    """(path, home) of a conversation in any known CLI home, default first."""
+    default_path = os.path.realpath(CLI_DEFAULT)
+    for h in [x for x in homes if x.path == default_path] + [x for x in homes if x.path != default_path]:
+        t = transcript_in(h.path, cli_id)
+        if t:
+            return t, h
+    return None, None
+
+
+def _desktop_profiles_reading(h, found, homes):
+    """The Desktop profiles whose records point at home h (profile_cli_home): a display hint only."""
+    out = []
+    for x in found:
+        p = Profile(x)
+        if profile_cli_home(p, homes)[1] == h.path:
+            out.append(p)
+    return out
+
+
+def _desktop_records(profiles):
+    """{CLI session id: [(profile name, desktop record id, earlier)]} over these Desktop profiles: each record's
+    cliSessionId (earlier False), and each id in its priorCliSessionIds (earlier True), the conversations the record
+    had before. Whether Desktop still reads those is not known, so they are kept like the current one, as
+    registered_clis and in_use_elsewhere already count them."""
+    out = {}
+    for p in profiles:
+        for _, _, _, r, rec in inventory(p, {}):
+            if not rec:
+                continue
+            rid, cur = sid_of(r)[6:], rec.get("cliSessionId")
+            if cur:
+                out.setdefault(cur, []).append((p.name, rid, False))
+            prior = rec.get("priorCliSessionIds")
+            for c in prior if isinstance(prior, list) else []:
+                if isinstance(c, str) and c and c != cur and (p.name, rid, True) not in out.get(c, []):
+                    out.setdefault(c, []).append((p.name, rid, True))
+    return out
+
+
+def _desktop_records_for(h, found, homes):
+    """The records of every Desktop profile whose records point at this home (profile_cli_home): the `desktop:` flag
+    of `sessions <CLI home>`, a display hint only."""
+    return _desktop_records(_desktop_profiles_reading(h, found, homes))
+
+
+def _desktop_records_any(found):
+    """The records of EVERY Desktop profile: what the rules of move and rollback weigh. Each profile is taken to read
+    ~/.claude (profile_cli_home says why), so a record in any profile keeps its conversation from leaving ~/.claude
+    (a move refuses; the rollback that restores the state before a move warns), and never from moving into it."""
+    return _desktop_records([Profile(x) for x in found])
+
+
+def _desktop_names(entries):
+    return ", ".join(sorted({e[0] for e in entries}))
 
 
 # ---------------- account registry ----------------
@@ -619,9 +1667,18 @@ def refresh_registry(paths):
         e["last_seen"] = stamp
 
     for path in paths:
+        if is_cli_home(path) and not os.path.exists(os.path.join(path, "config.json")):
+            try:
+                oa = load(global_config(path)).get("oauthAccount") or {}
+            except (OSError, ValueError, AttributeError):
+                continue
+            if oa.get("accountUuid"):
+                note(oa["accountUuid"], oa.get("emailAddress"), f"cli:{short(os.path.realpath(path))}",
+                     oa.get("organizationUuid"), oa.get("organizationName"))
+            continue
         p = Profile(path)
-        for f in glob.glob(os.path.join(p.path, "IndexedDB", "**", "*"), recursive=True) + \
-                glob.glob(os.path.join(p.path, "Local Storage", "leveldb", "*")):
+        for f in _glob(p.path, "IndexedDB", "**", "*", recursive=True) + \
+                _glob(p.path, "Local Storage", "leveldb", "*"):
             try:
                 if os.path.isfile(f) and os.path.getsize(f) < 64 << 20:
                     with open(f, "rb") as fh:
@@ -651,7 +1708,7 @@ def email(reg, uuid):
 def resolve_account(reg, p, spec):
     """email, full uuid, or uuid prefix -> uuid. Searches the registry and the profile's own account dirs."""
     s = spec.strip().lower()
-    cands = set(reg) | {os.path.basename(a) for k in STORES for a in glob.glob(os.path.join(p.store(k), "*"))
+    cands = set(reg) | {os.path.basename(a) for k in STORES for a in _glob(p.store(k), "*")
                         if os.path.isdir(a) and re.fullmatch(UUID, os.path.basename(a))}
     if "@" in s:
         hit = [u for u in cands if ((reg.get(u) or {}).get("email") or "").lower() == s]
@@ -749,7 +1806,7 @@ def desktop_version(paths):
         except SystemExit:
             ld = None
         best = None
-        for log in glob.glob(os.path.join(ld, "main*.log")) if ld else []:
+        for log in _glob(ld, "main*.log") if ld else []:
             try:
                 with open(log, encoding="utf-8", errors="replace") as f:
                     stamp = None
@@ -825,15 +1882,18 @@ def compat_note(dv):
 
 
 # ---------------- in use ----------------
-def in_use_elsewhere(recs):
-    if SANDBOX:
-        return []
+def in_use_elsewhere(recs, home=None):
     ids = {}
     for r in recs:
         for c in [r.get("cliSessionId")] + list(r.get("priorCliSessionIds") or []):
             if c:
                 ids[c] = r.get("title") or r.get("sessionId")
-    paths = {os.path.realpath(t): ids[c] for c in ids for t in [transcript(c)] if t}
+    paths = {os.path.realpath(t): ids[c] for c in ids for t in [transcript(c, home)] if t}
+    if SANDBOX:
+        # No process is scanned in the sandbox. TEST-ONLY: CCD_REHOME_OPEN_FILES names files (separated by
+        # os.pathsep) that the self-test says another process holds open, so the callers' checks can be tested.
+        held = {os.path.realpath(x) for x in os.environ.get("CCD_REHOME_OPEN_FILES", "").split(os.pathsep) if x}
+        return sorted(f"{paths[t]!r} (simulated open file)" for t in paths if t in held)
     busy = set()
     if not os.path.isdir("/proc") and paths:                 # macOS (and anything with lsof): one call
         try:
@@ -886,7 +1946,25 @@ def archive(p, kind, dirs, plan):
 
 
 def archives(p):
-    return sorted(os.path.basename(a) for a in glob.glob(os.path.join(ARCHIVE, p.key, "*")))
+    return sorted(os.path.basename(a) for a in _glob(os.path.join(ARCHIVE, p.key), "*"))
+
+
+def _mkdirs_like(snap, d, rel):
+    """Create d/rel and whichever of its parents up to d are missing, each with the mode its copy has in the
+    snapshot `snap` (an archive copy of d), so an undo gives a recreated folder its permissions back."""
+    missing, r = [], rel
+    while not os.path.isdir(os.path.join(d, r) if r else d):
+        missing.append(r)
+        if not r:
+            break
+        r = os.path.dirname(r)
+    for r in reversed(missing):
+        target, ref = (os.path.join(d, r), os.path.join(snap, r)) if r else (d, snap)
+        os.makedirs(target, 0o700, exist_ok=True)
+        try:
+            os.chmod(target, os.stat(ref).st_mode & 0o7777)
+        except OSError:
+            pass
 
 
 def rollback(p, name):
@@ -915,7 +1993,7 @@ def rollback(p, name):
                 continue
             say(f"  restore {f} -> {short(d)}")
             if not DRY:
-                os.makedirs(os.path.dirname(dst), 0o700, exist_ok=True); shutil.copy2(src, dst)
+                _mkdirs_like(snap, d, os.path.dirname(f)); shutil.copy2(src, dst)
         if os.path.isdir(d) and not DRY:          # empty dirs the undone move created (moved Cowork dirs, targets)
             for dp, dn, fn in os.walk(d, topdown=False):
                 rel = os.path.relpath(dp, d)
@@ -938,7 +2016,7 @@ def inventory(p, reg, kind="code"):
         if kind == "code":
             items = records(d)
         else:                                   # Cowork: local_* files or dirs; rpm/ is a plugin cache
-            items = sorted(x for x in glob.glob(os.path.join(d, "local_*")))
+            items = sorted(x for x in _glob(d, "local_*"))
         for r in items:
             rec = None
             if r.endswith(".json"):
@@ -1126,7 +2204,7 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
                 say(f"  moved cowork item {os.path.basename(r)} from {email(reg, a)[:26]}")
             moved += 1
         for d in srcs[kind]:                           # per-org side files
-            for tomb in glob.glob(os.path.join(d, "deleted_*")):
+            for tomb in _glob(d, "deleted_*"):
                 if not os.path.exists(os.path.join(target, os.path.basename(tomb))):
                     say(f"  copy tombstone {os.path.basename(tomb)}")
                     if not DRY:
@@ -1142,6 +2220,1243 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
         f"{moved} moved, {skipped} skipped. Archive: {arch}{' (not created)' if DRY else ''}")
     say(f"undo:  ccd-rehome rollback {p.name} {arch}")
     return arch
+
+
+# ---------------- moving between CLI homes ----------------
+def _special_kind(p):
+    """'a FIFO', 'a socket' or 'a device file' when p is one (never followed), else None. Such a file is never opened:
+    opening a FIFO waits for a writer that may never come, and none of them can be copied."""
+    try:
+        m = os.lstat(p).st_mode
+    except OSError:
+        return None
+    if stat.S_ISREG(m) or stat.S_ISDIR(m) or stat.S_ISLNK(m):
+        return None
+    return "a FIFO" if stat.S_ISFIFO(m) else "a socket" if stat.S_ISSOCK(m) else "a device file"
+
+
+def _sha256_file(p):
+    if not stat.S_ISREG(os.stat(p).st_mode):
+        raise OSError(errno.EINVAL, f"{short(p)} is not a regular file; it is never opened")
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _tree_entry(q):
+    """[kind, size, sha256] of one path, never followed: a symlink is its target's text, and a FIFO, socket or device
+    is never opened (a FIFO would wait for a writer)."""
+    m = os.lstat(q).st_mode
+    if stat.S_ISLNK(m):
+        return ["link", 0, os.readlink(q)]
+    if stat.S_ISDIR(m):
+        return ["dir", 0, None]
+    if stat.S_ISREG(m):
+        return ["file", os.path.getsize(q), _sha256_file(q)]
+    return ["special", 0, None]
+
+
+def _tree(path):
+    """{relpath: [kind, size, sha256]} for a file or a directory (JSON-friendly)."""
+    out = {}
+    if os.path.isdir(path) and not _is_link(path):
+        for dp, dn, fn in _walk(path):         # a link inside is recorded (never followed), not walked into
+            for n in dn + fn:
+                q = os.path.join(dp, n)
+                out[os.path.relpath(q, path)] = _tree_entry(q)
+        return out
+    return {"": _tree_entry(path)}
+
+
+def _identical(a, b):
+    try:
+        return os.path.getsize(a) == os.path.getsize(b) and _sha256_file(a) == _sha256_file(b)
+    except OSError:
+        return False
+
+
+def _path_size(p):
+    if os.path.isfile(p):
+        return os.path.getsize(p)
+    return sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in _walk(p) for f in fs)
+
+
+def _same_fs(a, b):
+    try:
+        return os.stat(os.path.dirname(a)).st_dev == os.stat(os.path.dirname(b)).st_dev
+    except OSError:
+        return False
+
+
+def _discard(p):
+    """Remove p (a file or a folder) if it is there. True when it is gone."""
+    try:
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+        elif os.path.lexists(p):
+            os.remove(p)
+    except OSError:
+        pass
+    return not os.path.lexists(p)
+
+
+def _step():
+    """Count one filesystem step of a CLI move or rollback, and apply a test-only fault (see _faults)."""
+    n = STEP[0]
+    STEP[0] += 1
+    if FAULTS.get("kill-after") == str(n):
+        os._exit(137)
+    if FAULTS.get("fail-after") == str(n):
+        raise OSError(errno.EIO, "simulated failure (CCD_REHOME_FAULT, self-test only)")
+    for name, sig in (("term-after", "SIGTERM"), ("hup-after", "SIGHUP")):
+        if FAULTS.get(name) == str(n) and hasattr(signal, sig):
+            FAULTS.pop(name)
+            os.kill(os.getpid(), getattr(signal, sig))
+    return n
+
+
+def _just_placed(dst):
+    """Test-only (see _faults): what can happen right after an item got its name in the target."""
+    n = str(STEP[0] - 1)
+    if FAULTS.get("vanish") == n:
+        FAULTS.pop("vanish")
+        _discard(dst)
+    if FAULTS.get("int-after-place") == n:
+        FAULTS.pop("int-after-place")
+        raise KeyboardInterrupt
+
+
+def _short_copy(p):
+    """Test-only (short-copy): drop the last byte of the first non-empty file of a copy."""
+    files = [p] if os.path.isfile(p) else sorted(os.path.join(dp, f) for dp, _, fs in os.walk(p) for f in fs)
+    for f in files:
+        size = os.path.getsize(f)
+        if size:
+            with open(f, "r+b") as fh:
+                fh.truncate(size - 1)
+            return
+
+
+def _ident(p):
+    """[st_dev, st_ino] of p, not followed. A rename keeps both, so it names the item a run renamed into place."""
+    s = os.lstat(p)
+    return [s.st_dev, s.st_ino]
+
+
+def _copy_verified(src, dst, st=None):
+    """Copy a file or folder to dst by way of a temporary name in dst's folder. The copy gets its real name only
+    once the size and sha256 of every file match the source, so a partial copy never looks like the real thing,
+    and whatever a failed copy left behind is removed. st (a journal step): before the rename into place,
+    st["ident"] records what is about to get the name; st["placed"] is set once it has it (see _ours)."""
+    os.makedirs(os.path.dirname(dst), 0o700, exist_ok=True)
+    tmp = f"{dst}.rehome-tmp-{os.getpid()}"
+    _discard(tmp)
+    try:
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.copytree(src, tmp)
+        else:
+            shutil.copy2(src, tmp)
+        if FAULTS.get("short-copy") == str(STEP[0] - 1):
+            FAULTS.pop("short-copy")
+            _short_copy(tmp)
+        if FAULTS.get("kill-in-copy") == str(STEP[0] - 1):
+            os._exit(137)
+        if FAULTS.get("appear") == str(STEP[0] - 1):
+            FAULTS.pop("appear")
+            os.makedirs(dst) if os.path.isdir(src) else open(dst, "w", encoding="utf-8").close()
+        if _tree(src) != _tree(tmp):
+            raise OSError(errno.EIO, f"copy verification failed: the copy of {short(src)} differs from it "
+                                     f"(size or sha256)")
+        if os.path.lexists(dst):
+            raise OSError(errno.EEXIST, f"{short(dst)} appeared while it was being copied")
+        if st is not None:
+            st["ident"] = _ident(tmp)              # the intent, recorded before the rename
+        os.rename(tmp, dst)
+        _just_placed(dst)
+        if st is not None:
+            st["placed"] = True
+    except BaseException:
+        if not _discard(tmp):
+            say(f"  warning: could not remove the partial copy {short(tmp)}; remove it yourself")
+        raise
+
+
+def _rename_between_homes(src, dst):
+    if "exdev" in FAULTS:
+        raise OSError(errno.EXDEV, "Invalid cross-device link (simulated: CCD_REHOME_FAULT)")
+    os.rename(src, dst)
+
+
+def _move_path(src, dst, copy=False, st=None):
+    """Move (or with copy=True, copy) one item. Same filesystem: an atomic rename. Otherwise, and when the rename
+    fails with EXDEV (two mounts of one filesystem have the same st_dev), a verified copy, then the source is
+    removed. Returns "rename", "copy" or "exdev" (the rename failed with EXDEV and the item was copied).
+    st (a journal step): st["ident"] is recorded before a rename, st["placed"] once dst is ours (see _ours)."""
+    os.makedirs(os.path.dirname(dst), 0o700, exist_ok=True)
+    how = "copy"
+    if not copy and _same_fs(src, dst):
+        try:
+            if st is not None:
+                st["ident"] = _ident(src)          # the intent, recorded before the rename
+            _rename_between_homes(src, dst)
+            _just_placed(dst)
+            if st is not None:
+                st["placed"] = True
+            return "rename"
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            if st is not None:
+                st["ident"] = None                 # the rename did not happen
+            how = "exdev"
+    _copy_verified(src, dst, st)
+    if not copy:
+        if os.path.isdir(src) and not os.path.islink(src):
+            shutil.rmtree(src)
+        else:
+            os.remove(src)
+    return how
+
+
+EXDEV_NOTE = ("  note: a rename between the homes failed with EXDEV (another mount of the same filesystem): those "
+              "items were copied, verified (size, sha256) and then removed from the source")
+
+
+def _missing_dirs(dst, stop):
+    """Parents of dst that do not exist yet, deepest first, stopping at `stop`."""
+    stop, out, d = os.path.realpath(stop), [], os.path.dirname(dst)
+    while os.path.realpath(d) != stop and not os.path.exists(d):
+        out.append(d); d = os.path.dirname(d)
+        if d == os.path.dirname(d):
+            break
+    return out
+
+
+def _shell_q(s):
+    return '"' + s + '"' if WIN else "'" + s.replace("'", "'\\''") + "'"
+
+
+def _env_commands(cmd, home=None, cwd=None):
+    """[(label, line)]: the shell line(s) that run `cmd` in folder `cwd` with CLAUDE_CONFIG_DIR=`home` (either may be
+    None). A POSIX shell takes the `VAR=value cmd` prefix: one line, label None. cmd.exe and PowerShell do not, so on
+    Windows there is one line for each, and the variable stays set in that window afterwards."""
+    if not WIN:
+        return [(None, (f"cd {_shell_q(cwd)} && " if cwd else "") +
+                 (f"CLAUDE_CONFIG_DIR={_shell_q(home)} " if home else "") + cmd)]
+    ps = lambda x: "'" + x.replace("'", "''") + "'"          # PowerShell: single quotes are literal
+    return [("cmd", (f'cd /d "{cwd}" && ' if cwd else "") + (f'set "CLAUDE_CONFIG_DIR={home}" && ' if home else "")
+             + cmd),
+            ("PowerShell", (f"Set-Location -LiteralPath {ps(cwd)}; " if cwd else "") +
+             (f"$env:CLAUDE_CONFIG_DIR={ps(home)}; " if home else "") + cmd)]
+
+
+def _cli_items_at(path, sid, key):
+    """The paths session `sid` (transcript in projects/<key>/) owns in the CLI home at `path`, in move order."""
+    items = []
+    t = os.path.join(path, "projects", key, sid + ".jsonl")
+    if os.path.lexists(t):
+        items.append(t)
+    keys = sorted({os.path.basename(d) for d in _glob(path, "projects", "*")})
+    for p in [os.path.join(path, "projects", key, sid)] + \
+             [os.path.join(path, "projects", k, sid) for k in keys if k != key] + \
+             [os.path.join(path, "tasks", sid), os.path.join(path, "file-history", sid)] + \
+             sorted(_glob(path, "todos", glob.escape(sid) + "*.json")):
+        if os.path.lexists(p):
+            items.append(p)
+    # One entry per real file: through a symlinked project folder (a renamed repo's alias) the same sidecar shows
+    # up under a second key. Keep the name without a symlink; an item that is itself a symlink stays (and refuses).
+    direct = {os.path.realpath(x) for x in items if _symlink_below(path, x) is None}
+    return [x for x in items if _symlink_below(path, x) in (None, x) or os.path.realpath(x) not in direct]
+
+
+def _cli_items(h, s):
+    """The paths a CLI session owns, relative to its home."""
+    return _cli_items_at(h.path, s["id"], s["key"])
+
+
+def _transcript_ids(path, key):
+    """The session ids with a transcript in projects/<key>/ of the CLI home at `path`."""
+    return {os.path.basename(t)[:-6] for t in _glob(os.path.join(path, "projects", key), "*.jsonl")
+            if re.fullmatch(UUID, os.path.basename(t)[:-6])}
+
+
+def _pick_cli_sessions(h, only, project, sessions=None):
+    """The rows of h.sessions() to move. An id with transcripts in two project folders gives two rows (move_cli
+    refuses it); --only matches ids, so such an id is still selected, and refused with the reason."""
+    sessions = h.sessions() if sessions is None else sessions
+    if project:
+        rp = os.path.realpath(os.path.expanduser(project))
+        sessions = [s for s in sessions if s["cwd"] and os.path.realpath(s["cwd"]) == rp]
+        if not sessions:
+            die(f"--project {project} matches no session in {h.name} (folders: `ccd-rehome sessions {h.name}`)")
+    if only:
+        picked = []
+        for oid in only:
+            hits = [s for s in sessions if s["id"].startswith(oid)]
+            ids = {s["id"] for s in hits}
+            if len(ids) != 1:
+                die(f"--only {oid!r} matches {len(ids)} sessions in {h.name} "
+                    f"(list them: ccd-rehome sessions {h.name})")
+            picked += [s for s in hits if s not in picked]
+        return picked
+    return sessions
+
+
+def _memory_problem(h, src_mem, root):
+    """Why the project memory folder `src_mem` of CLI home h must not be copied, or None. It is refused when it, a
+    folder above it inside the home, or anything inside it is a symlink, or when it resolves outside the home."""
+    why = (". Replace the link with what it points to, or move the session without its project memory "
+           "(--no-memory)")
+    odd = ". Move it out of the project memory, or move the session without its project memory (--no-memory)"
+    link = _symlink_below(h.path, src_mem)
+    if link:
+        what = "the project memory folder" if link == src_mem else "a folder above the project memory"
+        return f"{short(link)} ({what}) is a symlink{why}"
+    rp = os.path.realpath(src_mem)
+    if not (rp == root or rp.startswith(root + os.sep)):
+        return f"the project memory {short(src_mem)} escapes {h.name} (it resolves outside that home){why}"
+    for dp, dn, fn in _walk(src_mem):
+        for n in sorted(dn) + sorted(fn):
+            x = os.path.join(dp, n)
+            rx = os.path.realpath(x)
+            if _is_link(x):
+                return f"{short(x)} is a symlink{why}"
+            if not (rx == root or rx.startswith(root + os.sep)):
+                return f"{short(x)} escapes {h.name} (it resolves outside that home){why}"
+            if _special_kind(x):         # checked before any memory file is hashed: a FIFO would never answer
+                return f"{short(x)} is {_special_kind(x)} (not a regular file or folder){odd}"
+    return None
+
+
+def _target_problem(base, name, dst):
+    """Why a CLI move (or a rollback) must not write `dst` into the home at `base` (called `name`), or None: dst, or
+    a folder above it inside that home, resolves outside the home, or is a symlink. Checked before anything is
+    written or read there, so a link in the receiving home never takes a session, or a write, somewhere else."""
+    root, rd = os.path.realpath(base), os.path.realpath(dst)
+    if not (rd == root or rd.startswith(root + os.sep)):
+        return (f"{short(dst)} resolves to {short(rd)}, outside {name}. Replace the link in {name} with a real "
+                f"folder, then run it again")
+    link = _symlink_below(base, dst)
+    if link:
+        return f"{short(link)} in {name} is a symlink. Replace it with a real folder, then run it again"
+    if _special_kind(dst):
+        return (f"{short(dst)} in {name} is {_special_kind(dst)} (not a regular file or folder). Move it away, then "
+                f"run it again")
+    return None
+
+
+def _cli_plan_warnings(h, q, copy):
+    out = []
+    a, b = h.account(), q.account()
+    if a and b and a[2] and b[2] and a[2] != b[2]:
+        out.append(f"{h.name} and {q.name} are signed in to different organizations ({a[3] or a[2][:8]} vs "
+                   f"{b[3] or b[2][:8]}); continuing a session under the other organization may have its signed "
+                   f"thinking rejected (unverified)")
+    if q.signed_in() == "signed-out":
+        out.append(f"{q.name} is signed out ({login_note(q.path)}): sign in there before resuming these sessions")
+    if copy:
+        out.append("--copy keeps the source: the two copies diverge if both are used")
+    return out
+
+
+def _cli_plan_notes(q):
+    """What the tool cannot tell: on macOS the login is in the Keychain, which it never queries."""
+    if q.signed_in() == "unknown":
+        return [f"whether {q.name} is signed in cannot be read here: on macOS the login is in the Keychain, which this "
+                f"tool does not query. If `claude` asks for a login in that home, log in before resuming"]
+    return []
+
+
+def _cli_archive(h, manifest):
+    if DRY:
+        name = now_utc().strftime("%Y%m%dT%H%M%SZ") + "-cli-move"
+        say(f"  [dry-run] archive {name} (not created)"); return name
+    parent = os.path.join(CLI_ARCHIVE, h.key)
+    os.makedirs(parent, 0o700, exist_ok=True)
+    while True:              # unique among ALL CLI-home archives: rollback finds one by its name from either home
+        ts = now_utc().strftime("%Y%m%dT%H%M%SZ")
+        root = os.path.join(parent, f"{ts}-cli-move")
+        if not _glob(CLI_ARCHIVE, "*", f"{ts}-cli-move"):
+            break
+        time.sleep(1)
+    os.makedirs(root, 0o700)
+    write_json(os.path.join(root, "manifest.json"), dict(manifest, created_utc=ts), 2)
+    open(os.path.join(root, "COMPLETE"), "w", encoding="utf-8").close()
+    return os.path.basename(root)
+
+
+def _sidecar_files(base, items):
+    """The regular files inside the session folders projects/<key>/<id>/ among `items` ((path in `base`, ...) pairs
+    of one session): its sidecar folder and those under sibling keys. The target's cleanup ages them out like the
+    transcript, so a re-dating takes them too. A link inside is never followed (_walk)."""
+    out = []
+    for src, _ in items:
+        rel = os.path.relpath(src, base).split(os.sep)
+        if len(rel) == 3 and rel[0] == "projects" and os.path.isdir(src) and not _is_link(src):
+            out += [os.path.join(dp, f) for dp, dn, fn in _walk(src) for f in sorted(fn)
+                    if os.path.isfile(os.path.join(dp, f)) and not _is_link(os.path.join(dp, f))]
+    return out
+
+
+def _file_mtimes(path):
+    """{relpath: mtime_ns} of each regular file inside the folder `path` (None for a file): what a rollback gives back
+    to a folder's files that a move re-dated (_restore_mtime)."""
+    if not os.path.isdir(path) or _is_link(path):
+        return None
+    return {os.path.relpath(os.path.join(dp, f), path): os.lstat(os.path.join(dp, f)).st_mtime_ns
+            for dp, dn, fn in _walk(path) for f in fn if os.path.isfile(os.path.join(dp, f))
+            and not _is_link(os.path.join(dp, f))}
+
+
+def move_cli(h, q, only=None, project=None, copy=False, no_memory=False, keep_dates=False):
+    if h.path == q.path or _same_dir(h.path, q.path):
+        die("--to-profile names the same CLI home; nothing to do")
+    every = h.sessions()
+    picked = _pick_cli_sessions(h, only, project, every)
+    keys_of = {}
+    for s in every:
+        keys_of.setdefault(s["id"], []).append(s["key"])
+    live_ids = {d.get("sessionId") for d in h.live()}
+    # Desktop reads CLAUDE_CONFIG_DIR ?? ~/.claude, and nothing on disk says whether a window set it: every Desktop
+    # profile is taken to read ~/.claude (profile_cli_home says why). A record keeps its conversation from leaving
+    # ~/.claude, never from moving into it (that gives the window its conversation back); between two other homes
+    # the move goes ahead with a note.
+    desktop, dshort = _desktop_records_any(discover()), short(os.path.realpath(CLI_DEFAULT))
+    included, refusals, planned, dup_seen, desk_notes = [], [], set(), set(), []
+    root = os.path.realpath(h.path)
+    for s in picked:
+        sid = s["id"]
+        if len(keys_of.get(sid, ())) > 1:
+            if sid not in dup_seen:     # Claude Code cannot resume it by id there; the move would carry both copies
+                dup_seen.add(sid)
+                ks = sorted(keys_of[sid])
+                refusals.append(f"{sid[:8]} has a transcript in {len(ks)} project folders of {h.name} "
+                                f"({', '.join('projects/' + k for k in ks)}), so `claude --resume` cannot tell them "
+                                f"apart and the move would carry the duplicate into {q.name}. Compare them, move all "
+                                f"but one out of {h.name}, then run the move again")
+            continue
+        src_t = os.path.join(h.path, "projects", s["key"], sid + ".jsonl")
+        existing = _glob(q.path, "projects", "*", glob.escape(sid) + ".jsonl")
+        if existing:
+            if all(_identical(x, src_t) for x in existing):
+                say(f"  {sid[:8]}: already there in {q.name}; skipped")
+                continue
+            refusals.append(f"{q.name} already has a DIFFERENT transcript for {sid}")
+            continue
+        if sid in live_ids:
+            refusals.append(f"{sid[:8]} is OPEN in {h.name} (a live sessions/<pid>.json); close it there first")
+            continue
+        busy = in_use_elsewhere([{"cliSessionId": sid, "title": s["title"]}], h.path)
+        if busy:
+            refusals.append(f"{sid[:8]} is open in another process: {busy}")
+            continue
+        if not copy and h.default and sid in desktop:
+            # A record that names it among its earlier conversations first: then only --copy, since unregistering
+            # that record would also take its current conversation out of the window.
+            who, rid, earlier = next((e for e in desktop[sid] if e[2]), desktop[sid][0])
+            if earlier:
+                refusals.append(f"{sid[:8]} is shown by Desktop profile {who} (record {rid[:8]} names it among its "
+                                f"earlier conversations), and Desktop looks for its conversations in {dshort}: moving "
+                                f"it out of {h.name} would leave that window without it; use --copy, which leaves it "
+                                f"there (unregistering the record would take its current conversation out of that "
+                                f"window too)")
+            else:
+                refusals.append(f"{sid[:8]} is shown by Desktop profile {who}, and Desktop looks for its conversations "
+                                f"in {dshort}: moving it out of {h.name} would leave that window without it; unregister "
+                                f"it first (`ccd-rehome unregister {who} --only {rid}`) or use --copy")
+            continue
+        items, bad = [], None
+        for src in _cli_items(h, s):
+            dst = os.path.join(q.path, os.path.relpath(src, h.path))
+            rp, link = os.path.realpath(src), _symlink_below(h.path, src)
+            if link == src:
+                bad = f"{short(src)} is a symlink"
+            elif not (rp == root or rp.startswith(root + os.sep)):
+                bad = f"{short(src)} escapes {h.name} (it resolves outside that home)"
+            elif link:
+                bad = (f"{short(src)} is reached through the symlink {short(link)}. Replace the link with the folder "
+                       f"it points to, then run the move again")
+            elif rp in planned:
+                continue                # the same file, already planned with another session
+            elif _special_kind(src):
+                bad = (f"{short(src)} is {_special_kind(src)} (not a regular file or folder). Move it out of "
+                       f"{h.name}, then run the move again")
+            elif os.path.isdir(src):
+                # Before anything is hashed or copied: a link inside is never followed (a copy would take what it
+                # points to), and a FIFO, socket or device file is never opened.
+                inner = [os.path.join(dp, n) for dp, dn, fn in _walk(src) for n in sorted(dn) + sorted(fn)]
+                bad = next((f"{short(x)} is a symlink" for x in inner if _is_link(x)), None)
+                if not bad:
+                    bad = next((f"{short(x)} is {_special_kind(x)} (not a regular file or folder). Move it out of "
+                                f"{h.name}, then run the move again" for x in inner if _special_kind(x)), None)
+            if bad:
+                break
+            bad = _target_problem(q.path, q.name, dst)
+            if bad:
+                break
+            if os.path.lexists(dst):
+                bad = f"{q.name} already has {os.path.relpath(dst, q.path)}, which a move never overwrites"
+                break
+            items.append((src, dst))
+        if bad:
+            refusals.append(bad)
+            continue
+        planned.update(os.path.realpath(src) for src, _ in items)
+        included.append((s, items))
+        verb = "copy" if copy else "move"
+        if sid in desktop and q.default:
+            desk_notes.append(f"{sid[:8]} is shown by Desktop profile {_desktop_names(desktop[sid])}: this {verb} puts "
+                              f"it in {dshort}, where Desktop looks for its conversations, and so gives that window "
+                              f"its conversation back" +
+                              ("" if copy else f" (a window started with CLAUDE_CONFIG_DIR={short(h.path)} reads "
+                                               f"{h.name} instead: the undo printed below brings it back)"))
+        elif sid in desktop and not h.default:
+            desk_notes.append(f"{sid[:8]} is shown by Desktop profile {_desktop_names(desktop[sid])}, and Desktop "
+                              f"looks for its conversations in {dshort} (or in the folder its own CLAUDE_CONFIG_DIR "
+                              f"names, if it was started with one): this {verb} changes what that window can open "
+                              f"only if it was started with CLAUDE_CONFIG_DIR={short(h.path)} or {short(q.path)}")
+
+    mem_ops, seen_mem = [], set()
+    if not no_memory:
+        for s, _ in included:
+            src_mem = os.path.join(h.path, "projects", s["key"], "memory")
+            dst_mem = os.path.join(q.path, "projects", s["key"], "memory")
+            if src_mem in seen_mem or not os.path.lexists(src_mem):
+                continue
+            seen_mem.add(src_mem)
+            # Checked before anything in it is opened: a symlinked memory folder (or one inside it) is never
+            # followed or read, since it could lead anywhere (another home, ~/.claude itself, .credentials.json).
+            bad = _memory_problem(h, src_mem, root)
+            if bad:
+                refusals.append(bad)
+                continue
+            if not os.path.isdir(src_mem):
+                continue
+            for src in [os.path.join(dp, f) for dp, dn, fn in _walk(src_mem) for f in sorted(fn)]:
+                dst = os.path.join(dst_mem, os.path.relpath(src, src_mem))
+                bad = _target_problem(q.path, q.name, dst)    # before the target's file is read or written: a
+                if bad:                                       # link to a folder or a file, here or above it
+                    refusals.append(bad)
+                    break
+                size, sha = os.path.getsize(src), _sha256_file(src)
+                if not os.path.exists(dst):
+                    mem_ops.append({"src": src, "dst": dst, "size": size, "sha256": sha, "copied": True})
+                elif os.path.getsize(dst) == size and _sha256_file(dst) == sha:
+                    mem_ops.append({"src": src, "dst": dst, "size": size, "sha256": sha, "copied": False,
+                                    "same": True})
+                else:
+                    mem_ops.append({"src": src, "dst": dst, "size": size, "sha256": sha, "copied": False,
+                                    "conflict": True})
+
+    warnings = _cli_plan_warnings(h, q, copy)
+    ret = retention(q.path)
+    rule, (cdays, cwhere) = ret["rule"], ret["cleanup"]
+    kdays, ksetting, kwhere = rule(DESKTOP_ENTRYPOINT)
+    keep = (f"until it is {kdays} days old ({ksetting} in {kwhere})" if kdays else
+            f"at any age ({q.name} sets no desktopSessionCleanupPeriodDays)")
+    redate, kept_notes = set(), []
+    # What the target would delete is re-dated in the TARGET: on a move the transcript that now lives only there, on a
+    # --copy the copy (the source keeps its own, with its dates). The tail of each message says which.
+    them = "the copy" if copy else "it"
+    after = (f" ({h.name} keeps its own)" if copy else
+             f". After this move {h.name} no longer has it (the archive holds no copy): use --copy to keep it in "
+             f"{h.name} too")
+    for s, items in included:
+        # Which retention applies is read from the transcript's most recent records (retention): one last continued
+        # in Claude Desktop is kept at any age by Claude Code 2.1.248 and later, unless desktopSessionCleanupPeriodDays
+        # (or a managed cleanupPeriodDays) sets a limit; an earlier Claude Code deletes it after cleanupPeriodDays.
+        sid8 = s["id"][:8]
+        days, setting, where = rule(s.get("entrypoint"))
+        age = (time.time() - s["mtime"]) / 86400.0
+        nside = len(_sidecar_files(h.path, items))
+        side = f", and so are those of the {nside} file(s) in its sidecar folder" if nside else ""
+        mtime = "the copy's mtime" if copy else "its mtime"
+        if (days is None or age <= days) and s.get("entrypoint") == DESKTOP_ENTRYPOINT and age > cdays:
+            # Kept by the target's rule for Desktop transcripts, but older than cleanupPeriodDays, which an earlier
+            # Claude Code applies to it. The terminal `claude` is the version the tool can read; when it is not
+            # known, the transcript (or the copy) is re-dated as a terminal one would be.
+            _, ver, why = claude_version()
+            if ver and _vkey(ver) >= _vkey(DESKTOP_RULE_VERSION):
+                if copy:
+                    kept_notes.append(f"{sid8} was last continued in Claude Desktop, and Claude Code 2.1.248 and "
+                                      f"later keep such a transcript {keep}; `claude --version` here is {ver}, so "
+                                      f"this copy is not re-dated. Claude Code before 2.1.248 deletes it after "
+                                      f"cleanupPeriodDays ({cdays} days in {cwhere}), as any version does under the "
+                                      f"HIPAA configuration, which this tool cannot read ({h.name} keeps its own)")
+                    continue
+                warnings.append(f"{sid8} is older than {cdays} days (cleanupPeriodDays in {cwhere}) and was last "
+                                f"continued in Claude Desktop: Claude Code 2.1.248 and later keep such a transcript "
+                                f"{keep}, and `claude --version` here is {ver}, so it is not re-dated (an earlier "
+                                f"Claude Code started in {q.name} would delete it at its next start). After this "
+                                f"move {h.name} no longer has it (the archive holds no copy): use --copy to keep it in "
+                                f"{h.name} too")
+                continue
+            vwhy = (f"`claude --version` here is {ver}" if ver else
+                    f"the version of Claude Code here is not known ({why})")
+            if keep_dates and copy:
+                warnings.append(f"{sid8} is older than {cdays} days (cleanupPeriodDays in {cwhere}) and was last "
+                                f"continued in Claude Desktop, and {vwhy}: Claude Code before 2.1.248 deletes such a "
+                                f"transcript after cleanupPeriodDays, and --keep-dates keeps the copy's date: "
+                                f"{q.name} would delete the copy at its next start{after}")
+                continue
+            if keep_dates:
+                refusals.append(f"{sid8} is older than {cdays} days (cleanupPeriodDays in {cwhere}) and was last "
+                                f"continued in Claude Desktop, and {vwhy}: Claude Code before 2.1.248 deletes such a "
+                                f"transcript after cleanupPeriodDays, and --keep-dates keeps that date: {q.name} would "
+                                f"delete it at its next start, and after this move {h.name} no longer has it (the "
+                                f"archive holds no copy): use --copy to keep it in {h.name} too")
+                continue
+            redate.add(s["id"])
+            warnings.append(f"{sid8} is older than {cdays} days (cleanupPeriodDays in {cwhere}) and was last "
+                            f"continued in Claude Desktop: Claude Code 2.1.248 and later keep such a transcript "
+                            f"{keep}, but {vwhy}, and an earlier version deletes it after cleanupPeriodDays: {q.name} "
+                            f"would delete {them} at its next start; {mtime} is set to now{side}" +
+                            (f" (use --keep-dates to keep {'them' if nside else 'it'})" if copy else "") +
+                            f", which only postpones that: {q.name} deletes it after {cdays} days without new "
+                            f"activity there{after}")
+            continue
+        if days is None or age <= days:
+            continue
+        if keep_dates and not copy:
+            # Kept at its old date, it is deleted at the target's next start, and after a move nothing else has it.
+            refusals.append(f"{sid8} is older than {days} days ({setting} in {where}), and --keep-dates keeps that "
+                            f"date: {q.name} would delete it at its next start, and after this move {h.name} no "
+                            f"longer has it (the archive holds no copy): use --copy to keep it in {h.name} too")
+            continue
+        # Re-dating postpones the target's retention by one period; it does not prevent it (a conversation opened in
+        # Desktop without a new turn keeps its mtime). Without --copy the source no longer has it either: a backup
+        # home that is never started is what kept it until now, and the archive holds no copy.
+        redate.add(s["id"])
+        # (each setting's name a literal: the troubleshooting rows quote this message word for word)
+        w = (f"{sid8} is older than {days} days ("
+             f"{'cleanupPeriodDays' if setting == 'cleanupPeriodDays' else 'desktopSessionCleanupPeriodDays'} in "
+             f"{where}): {q.name} would delete {them} at its next start")
+        if keep_dates:              # (a --copy: on a move it is refused above)
+            w += "; --keep-dates keeps the copy's date"
+        else:
+            w += (f"; {mtime} is set to now{side}" +
+                  (f" (use --keep-dates to keep {'them' if nside else 'it'})" if copy else "") +
+                  f", which only postpones that: {q.name} deletes it after {days} days without new activity there")
+        warnings.append(w + after)
+
+    say(f"{h.name} -> {q.name}: {len(included)} session(s)" + ("  [copy]" if copy else ""))
+    for s, items in included:
+        say(f"  {s['id'][:8]}  {(s['title'] or '')[:60]}")
+        for src, dst in items:
+            say(f"    {'copy' if copy else 'move'} {os.path.relpath(src, h.path)}  ({_path_size(src)} bytes)")
+    if mem_ops:
+        say("  memory (copied, never moved; other sessions still use it):")
+        for op in mem_ops:
+            rel = os.path.relpath(op["src"], h.path)
+            if op.get("copied"):
+                say(f"    copy {rel}")
+            elif op.get("conflict"):
+                say(f"    CONFLICT {rel}: {q.name} already has a different file; kept as it is")
+            else:
+                say(f"    same {rel} (identical in {q.name}; skipped)")
+    for w in warnings:
+        say(f"  warning: {w}")
+    for n in _cli_plan_notes(q) + desk_notes + kept_notes:
+        say(f"  note: {n}")
+    for r in refusals:
+        say(f"  REFUSE {r}")
+
+    if refusals:
+        first = f"{refusals[0]}{' (and more above)' if len(refusals) > 1 else ''}"
+        if DRY:
+            die(f"dry run complete: nothing was written. The real run would REFUSE: {first}. Fix what the REFUSE "
+                f"line(s) say, then run the dry run again.")
+        die(f"refusing: {first}. Nothing was changed.")
+    if not included:
+        say(f"{h.name}: nothing to move into {q.name}."); return None
+    if DRY:
+        say("dry run complete: nothing was written. The real run would do the above")
+        return None
+
+    created = set()
+    for _, items in included:
+        for _, dst in items:
+            created.update(_missing_dirs(dst, q.path))
+    for op in mem_ops:
+        if op.get("copied"):
+            created.update(_missing_dirs(op["dst"], q.path))
+    # pre_existing: what P2 already had of the session (rollback leaves it there); dest_sessions_before: the
+    # sessions P2 already had in each project (they never used the memory this move copies: rollback may remove it)
+    manifest = {"kind": "cli-move", "tool": f"ccd-rehome {VERSION}",
+                "source": h.path, "source_name": h.name, "dest": q.path, "dest_name": q.name,
+                "copy": bool(copy), "sessions": [{"id": s["id"], "title": s["title"], "key": s["key"],
+                                                  "cwd": s["cwd"],
+                                                  "pre_existing": _cli_items_at(q.path, s["id"], s["key"])}
+                                                 for s, _ in included],
+                "items": [{"src": src, "dst": dst, "session": s["id"], "size": _path_size(src),
+                           "sha256": _sha256_file(src) if os.path.isfile(src) else None,
+                           "tree": _tree(src), "mtime_ns": os.lstat(src).st_mtime_ns,
+                           "mtimes": _file_mtimes(src)}
+                          for s, items in included for src, dst in items],
+                "memory": mem_ops, "created_dirs": sorted(created, key=lambda d: (d.count(os.sep), d)),
+                "dest_sessions_before": {k: sorted(_transcript_ids(q.path, k))
+                                         for k in {s["key"] for s, _ in included}},
+                "warnings": warnings}
+    arch = _cli_archive(h, manifest)
+    say(f"  archive {arch} written (if this run is cut off: ccd-rehome rollback {h.name} {arch})")
+
+    # A transaction: each step is journaled before it runs (a rename's intent before the rename); a failure, Ctrl-C,
+    # SIGTERM or SIGHUP undoes the steps started, newest first, deciding each from what is on disk (_undo_cli).
+    journal, what, noted = [], "starting", False
+    handlers = _trap_stop_signals()
+    try:
+        try:
+            for s, items in included:
+                for src, dst in items:
+                    what = f"{'copying' if copy else 'moving'} {os.path.relpath(src, h.path)}"
+                    _step()
+                    journal.append({"do": "copy" if copy else "move", "src": src, "dst": dst, "done": False,
+                                    "placed": False, "ident": None, "what": what})
+                    if _move_path(src, dst, copy=copy, st=journal[-1]) == "exdev" and not noted:
+                        say(EXDEV_NOTE); noted = True
+                    journal[-1]["done"] = True
+                if s["id"] in redate and not keep_dates:
+                    # The transcript, then each file of its sidecar folder (subagents/, tool-results/, mcp-tasks/,
+                    # workflows/), which the target's cleanup ages out by the same rule; each journaled first.
+                    t = os.path.join(q.path, "projects", s["key"], s["id"] + ".jsonl")
+                    for x in [t] + _sidecar_files(q.path, [(dst, dst) for _, dst in items]):
+                        if os.path.isfile(x) and not _is_link(x):
+                            what = f"re-dating {os.path.relpath(x, q.path)}"
+                            journal.append({"do": "mtime", "dst": x, "mtime_ns": os.stat(x).st_mtime_ns,
+                                            "what": what})
+                            os.utime(x, None)
+            for op in mem_ops:
+                if op.get("copied"):
+                    what = f"copying {os.path.relpath(op['src'], h.path)}"
+                    _step()
+                    journal.append({"do": "copy", "src": op["src"], "dst": op["dst"], "done": False,
+                                    "placed": False, "ident": None, "what": what})
+                    _copy_verified(op["src"], op["dst"], journal[-1])
+                    journal[-1]["done"] = True
+            STOP_SIGNALS["armed"] = False   # done: a SIGTERM from here on no longer undoes it
+        except BaseException as e:          # an OSError, a failed verification, Ctrl-C, SIGTERM: undo, then say so
+            _fail_cli_move(h, q, arch, manifest, journal, what, e)
+    finally:
+        _restore_signals(handlers)
+
+    say(f"done: {len(included)} session(s) {'copied' if copy else 'moved'}. Archive: {arch}")
+    for s, _ in included:
+        lines = _env_commands(f"claude --resume {s['id']}", None if q.default else q.path, s["cwd"])
+        for label, line in lines:
+            say(f"  continue {s['id'][:8]}{' (' + label + ')' if label else ''}: {line}")
+    if WIN and included and not q.default:
+        say("  (cmd and PowerShell keep CLAUDE_CONFIG_DIR set in that window: use a new window for another home)")
+    say(f"undo:  ccd-rehome rollback {h.name} {arch}   (or rollback {q.name} {arch})")
+    return arch
+
+
+class Stopped(BaseException):
+    """A SIGTERM or SIGHUP while a CLI move runs (see _trap_stop_signals): undone as after Ctrl-C."""
+
+
+STOP_SIGNALS = {"armed": False}
+
+
+def _on_stop_signal(signum, frame):
+    if STOP_SIGNALS["armed"]:
+        raise Stopped(signum)
+
+
+def _trap_stop_signals():
+    """For the duration of a CLI move: SIGTERM (`kill`, an agent's timeout) and SIGHUP (the terminal closed) undo it as
+    Ctrl-C does, instead of ending the process with the session split between two homes. A signal the caller
+    ignores (`nohup`) stays ignored. Returns the caller's SIGINT, SIGTERM and SIGHUP handlers, for _restore_signals."""
+    old = {}
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            old[sig] = signal.getsignal(sig)
+            if name != "SIGINT" and old[sig] != signal.SIG_IGN:
+                signal.signal(sig, _on_stop_signal)
+        except (ValueError, OSError, RuntimeError):      # not the main thread, or not settable here
+            old.pop(sig, None)
+    STOP_SIGNALS["armed"] = True
+    return old
+
+
+def _restore_signals(old):
+    STOP_SIGNALS["armed"] = False
+    for sig, handler in old.items():
+        try:
+            signal.signal(sig, signal.SIG_DFL if handler is None else handler)
+        except (ValueError, OSError, RuntimeError, TypeError):
+            pass
+
+
+def _why(e):
+    """One readable line for an error (a copytree failure carries a list of (src, dst, message): the first one)."""
+    if isinstance(e, Stopped):
+        try:
+            return f"interrupted ({signal.Signals(e.args[0]).name})"
+        except (ValueError, IndexError, AttributeError):
+            return "interrupted (a signal)"
+    if isinstance(e, KeyboardInterrupt):
+        return "interrupted"
+    if isinstance(e, shutil.Error) and e.args and isinstance(e.args[0], list) and e.args[0] \
+            and len(e.args[0][0]) == 3:
+        return str(e.args[0][0][2]) + (f" (and {len(e.args[0]) - 1} more)" if len(e.args[0]) > 1 else "")
+    return str(e) or type(e).__name__
+
+
+def _errno_of(e):
+    n = getattr(e, "errno", None)
+    if n is None:
+        m = re.search(r"\[Errno (\d+)\]", _why(e))
+        n = int(m.group(1)) if m else None
+    return n
+
+
+def _ignore_sigint():
+    """Undoing must not be cut short by a second Ctrl-C, SIGTERM or SIGHUP."""
+    STOP_SIGNALS["armed"] = False
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError, AttributeError):
+        pass
+
+
+def _ours(st):
+    """Did this run put st["dst"] there? Yes once st["placed"] is set; and when the run was stopped between a rename
+    and that note, by the identity recorded before the rename (a rename keeps st_dev and st_ino). Never a dst that
+    someone else made."""
+    try:
+        s = os.lstat(st["dst"])
+    except OSError:
+        return False
+    if st.get("placed"):
+        return True
+    ident = st.get("ident")
+    return bool(ident) and bool(s.st_ino) and [s.st_dev, s.st_ino] == list(ident)
+
+
+def _undo_cli(journal):
+    """Undo the journaled steps of a CLI move, newest first, each decided from what is on disk now (never from how
+    far the run got to noting it). Returns what could not be undone."""
+    left = []
+    for st in reversed(journal):
+        try:
+            if st["do"] == "mtime":
+                if os.path.exists(st["dst"]):
+                    os.utime(st["dst"], ns=(os.stat(st["dst"]).st_atime_ns, st["mtime_ns"]))
+                    say(f"  undone: {st['what']}")
+                continue
+            src, dst = st["src"], st["dst"]
+            if not os.path.lexists(dst):
+                continue                               # nothing of this step is in the target
+            in_src, ours = os.path.lexists(src), _ours(st)
+            if st["do"] == "copy":                     # --copy, or a memory file: the source never moves
+                if not ours:
+                    continue                           # someone else's file
+                if not in_src:
+                    raise OSError(errno.ENOENT, f"{short(src)} is gone, so its copy {short(dst)} is kept: it may be "
+                                                f"the only one left")
+                if not _discard(dst):
+                    raise OSError(errno.EACCES, f"could not remove {short(dst)}")
+            elif not in_src:
+                # In the target and no longer in the source: this run moved it (a rename, or a verified copy and the
+                # source removed), even when it was stopped before it could note that. It goes back.
+                _move_path(dst, src)
+            elif not ours:
+                continue                               # the source is still here, and dst is someone else's
+            elif _tree(src) == _tree(dst):             # copied and verified; the source is still whole
+                if not _discard(dst):
+                    raise OSError(errno.EACCES, f"could not remove {short(dst)}")
+            elif not st["done"]:                       # copied and verified; removing the source stopped part-way
+                if not _discard(src):
+                    raise OSError(errno.EACCES, f"could not remove the rest of {short(src)}")
+                _move_path(dst, src)
+            else:
+                raise OSError(errno.EEXIST, f"{short(src)} and {short(dst)} both exist and differ")
+            say(f"  undone: {st['what']}")
+        except Exception as e:
+            left.append(f"{st['what']}: {e}")
+    return left
+
+
+def _undo_unverified(manifest, journal):
+    """What an undo did not bring back, checked on disk: every item is in the source again as the move found it
+    (size and sha256 of every file), and nothing this run placed is left in the target. Empty: verified."""
+    out = []
+    for it in manifest.get("items", []):
+        if not os.path.lexists(it["src"]):
+            out.append(f"{short(it['src'])} is not back")
+        elif it.get("tree") is not None and _tree(it["src"]) != it["tree"]:
+            out.append(f"{short(it['src'])} is back but differs from what the move found (size or sha256)")
+    for st in journal:
+        if st["do"] != "mtime" and _ours(st):
+            out.append(f"{short(st['dst'])} is still there")
+    return out
+
+
+def _fail_cli_move(h, q, arch, manifest, journal, what, err):
+    _ignore_sigint()
+    n = _errno_of(err)
+    hint = (f"check that you may write to {h.name} and {q.name}, then run the move again"
+            if n in (errno.EACCES, errno.EPERM) else
+            f"free some space where {q.name} lives, then run the move again"
+            if n in (errno.ENOSPC, errno.EFBIG, getattr(errno, "EDQUOT", -1)) else
+            "fix the cause, then run the move again")
+    say(f"  FAILED while {what}: {_why(err)}. Undoing the {len(journal)} step(s) already started:")
+    left = _undo_cli(journal)
+    left = left or _undo_unverified(manifest, journal)       # the archive goes only once every item is back
+    if left:
+        for x in left:
+            say(f"  NOT undone: {x}")
+        die(f"the move stopped while {what} ({_why(err)}), and undoing it did not finish: {left[0]}"
+            f"{' (and more above)' if len(left) > 1 else ''}. The archive {arch} is kept: fix the cause, then run "
+            f"`ccd-rehome rollback {h.name} {arch}`; it moves back what is in {q.name} and leaves what never left "
+            f"{h.name}.")
+    _prune_created(manifest)
+    root = os.path.join(CLI_ARCHIVE, h.key, arch)
+    shutil.rmtree(root, ignore_errors=True)
+    try:
+        os.rmdir(os.path.dirname(root))           # only if it is empty now
+    except OSError:
+        pass
+    die(f"the move stopped while {what} ({_why(err)}). It was undone: nothing was changed (archive {arch} "
+        f"removed). To do: {hint}.")
+
+
+def _archive_has(m, h):
+    """Is CLI home h the source or the destination of the cli-move manifest m? By identity: a manifest may name
+    ~/.claude by another name (_same_dir)."""
+    return any(x and (_home_path(x) == h.path or _same_dir(x, h.path)) for x in (m.get("source"), m.get("dest")))
+
+
+def _find_cli_archive(h, name):
+    hits = []
+    for d in _glob(CLI_ARCHIVE, "*", glob.escape(name)):
+        try:
+            m = load(os.path.join(d, "manifest.json"))
+        except (OSError, ValueError):
+            continue
+        if m.get("kind") == "cli-move" and _archive_has(m, h):
+            hits.append((d, m))
+    if len(hits) > 1:
+        die(f"archive name {name!r} is ambiguous ({len(hits)} matches); name the other side of the move instead")
+    return hits[0] if hits else (None, None)
+
+
+def cli_archives(h):
+    """Names of the cli-move archives whose manifest has this home as its source or its destination, oldest first:
+    the ones `rollback` accepts for it (see _find_cli_archive)."""
+    out = set()
+    for d in _glob(CLI_ARCHIVE, "*", "*-cli-move"):
+        try:
+            m = load(os.path.join(d, "manifest.json"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(m, dict) and m.get("kind") == "cli-move" and _archive_has(m, h):
+            out.add(os.path.basename(d))
+    return sorted(out)
+
+
+def _rollback_memory(m, leaving):
+    """Remove the memory files the move copied that are unchanged, unless a session of that project that came to
+    P2 after the move (a later move, or one started there) is still in P2 and uses them. `leaving`: the ids whose
+    transcripts this rollback takes out of P2."""
+    dest = m.get("dest") or ""
+    before = m.get("dest_sessions_before") or {}
+    for op in m.get("memory", []):
+        if not op.get("copied"):
+            continue
+        dst = op["dst"]
+        if not os.path.exists(dst):
+            continue
+        try:
+            same = os.path.getsize(dst) == op.get("size") and _sha256_file(dst) == op.get("sha256")
+        except OSError:
+            same = False
+        rel = os.path.relpath(dst, dest) if dest else dst
+        if not same:
+            say(f"  kept changed memory file {short(dst)}")
+            continue
+        if op.get("src") and not os.path.lexists(op["src"]):
+            say(f"  kept copied memory {rel}: its original {short(op['src'])} is no longer in {m.get('source_name')}, "
+                f"so this copy may be the only one left")
+            continue
+        parts = rel.split(os.sep)
+        key = parts[1] if len(parts) > 2 and parts[0] == "projects" else None
+        users = sorted(_transcript_ids(dest, key) - set(leaving) - set(before.get(key) or [])) if key else []
+        if users:
+            say(f"  kept copied memory {rel}: session {users[0][:8]} of that project is still in "
+                f"{m.get('dest_name')} and uses it")
+            continue
+        say(f"  remove copied memory {rel}")
+        remove(dst)
+
+
+def _prune_created(m):
+    for d in sorted(m.get("created_dirs", []), key=lambda x: (x.count(os.sep), x), reverse=True):
+        try:
+            if os.path.isdir(d) and not os.listdir(d):
+                if DRY:
+                    say(f"  [dry-run] rmdir {short(d)}")
+                else:
+                    os.rmdir(d)
+        except OSError:
+            pass
+
+
+def _restore_mtime(path, it):
+    """Give a moved-back file the mtime it had before the move (a move may re-date an old transcript), unless its
+    content changed since; for a folder (a sidecar folder whose files a move re-dated), each file it recorded the
+    same way."""
+    it = it or {}
+    try:
+        if os.path.isdir(path) and not _is_link(path):
+            tree = it.get("tree") or {}
+            for rel, ns in (it.get("mtimes") or {}).items():
+                f = os.path.join(path, rel)
+                want = tree.get(rel)
+                if os.path.isfile(f) and not _is_link(f) and os.stat(f).st_mtime_ns != ns and want and \
+                        want[0] == "file" and os.path.getsize(f) == want[1] and _sha256_file(f) == want[2]:
+                    os.utime(f, ns=(os.stat(f).st_atime_ns, ns))
+            return
+        ns = it.get("mtime_ns")
+        if ns is not None and os.path.isfile(path) and os.stat(path).st_mtime_ns != ns and \
+                os.path.getsize(path) == it.get("size") and _sha256_file(path) == it.get("sha256"):
+            os.utime(path, ns=(os.stat(path).st_atime_ns, ns))
+    except OSError:
+        pass
+
+
+def _rollback_plan(m):
+    """Per session of a cli-move manifest: what to move back (or, for --copy, remove) from P2. Each entry is
+    (src in P, dst in P2, manifest item or None). The session's items are listed in P2 again, so what it gained
+    there after the move goes back too; what P2 had of it before the move (`pre_existing`) stays."""
+    src_home, dst_home = m["source"], m["dest"]
+    plans = []
+    for s in m.get("sessions", []):
+        sid = s["id"]
+        known = [it for it in m.get("items", [])
+                 if (it.get("session") or "") == sid or
+                 (not it.get("session") and os.path.basename(it["dst"]).startswith(sid))]
+        listed = {it["dst"] for it in known} | set(s.get("pre_existing") or [])
+        gained = [x for x in _cli_items_at(dst_home, sid, s["key"]) if x not in listed]
+        entries = [(it["src"], it["dst"], it) for it in known] + \
+                  [(os.path.join(src_home, os.path.relpath(x, dst_home)), x, None) for x in gained]
+        plans.append({"s": s, "entries": entries})
+    return plans
+
+
+def rollback_cli(h, name):
+    if not ARCH_RE.fullmatch(name or ""):
+        die(f"not an archive name: {name!r} (see `ccd-rehome status {h.name}`)")
+    root, m = _find_cli_archive(h, name)
+    if not root:
+        die(f"no cli-move archive named {name!r} for {h.name}; list them: ccd-rehome status {h.name}")
+    if not os.path.exists(os.path.join(root, "COMPLETE")):
+        die(f"no complete archive at {root}")
+    copy, src_name, dst_name = bool(m.get("copy")), m.get("source_name"), m.get("dest_name")
+    if not _same_dir(m["dest"], h.path):
+        CliHome(m["dest"])              # the target must still be a CLI home (CliHome refuses, and says why)
+    rel = (lambda x: os.path.relpath(x, m["dest"]))
+
+    # Plan. A move cut off part-way leaves a session split: an item only in P2 goes back, an item only in P never
+    # left and is skipped, an item in BOTH is a conflict and refuses. --copy: a session is one unit, removed only if
+    # nothing of its copy changed (or was added) since the move.
+    both, touched, leaving = [], [], set()
+    for pl in _rollback_plan(m):
+        sid, act, notes = pl["s"]["id"], [], []
+        if copy:
+            present = [e for e in pl["entries"] if os.path.lexists(e[1])]
+            changed = [e[1] for e in present
+                       if e[2] is None or e[2].get("tree") is None or _tree(e[1]) != e[2]["tree"]]
+            gone = [e[0] for e in present if not os.path.lexists(e[0])]
+            if changed:
+                notes.append(f"  kept the copy of {sid[:8]} in {dst_name}: {short(changed[0])} changed since the move "
+                             f"(or is new), so nothing of that session is removed")
+            elif gone:          # a copy is removed only while its original is still there
+                notes.append(f"  kept the copy of {sid[:8]} in {dst_name}: its original {short(gone[0])} is no longer "
+                             f"in {src_name}, so the copy may be the only one left; nothing of that session is removed")
+            else:
+                act = present
+        else:
+            for e in pl["entries"]:
+                in_p2, in_p = os.path.lexists(e[1]), os.path.lexists(e[0])
+                if in_p2 and in_p:
+                    both.append(e)
+                elif in_p2:
+                    act.append(e)
+                elif in_p:
+                    notes.append(f"  skip {os.path.relpath(e[0], m['source'])}: still in {src_name} (it never left)")
+                else:
+                    notes.append(f"  note: {os.path.relpath(e[0], m['source'])} is in neither home; "
+                                 f"nothing to move back")
+        if act:
+            touched.append((pl["s"], act))
+            leaving.add(sid)
+        for x in notes:
+            say(x)
+
+    # The same checks as a move, on P2: a live registry entry, another process holding the transcript (outside the
+    # sandbox). A Desktop record never refuses a rollback: it restores the state before the move, the undo the move
+    # printed. When that takes the session out of ~/.claude (where every Desktop profile is taken to look) while a
+    # profile lists it, the rollback warns, with the move that gives the window its conversation back.
+    refusals = [f"{short(e[0])} is in both {src_name} and {dst_name}; compare them, move one of them away, then roll "
+                f"back again" for e in both]
+    if not copy:        # moving back writes into the source home: no link there may take a session elsewhere
+        for _, act in touched:
+            for e in act:
+                bad = _target_problem(m["source"], src_name, e[0])
+                if bad and bad not in refusals:
+                    refusals.append(bad)
+    live = {d.get("sessionId") for d in live_entries(m["dest"])}
+    desktop = _desktop_records_any(discover()) if touched else {}
+    default_path = os.path.realpath(CLI_DEFAULT)     # by identity: the manifest may name ~/.claude another way
+    dshort, src_def, dst_def = short(default_path), _is_default_home(m["source"]), _is_default_home(m["dest"])
+    desk_warn, desk_notes = [], []
+    for s, _ in touched:
+        sid = s["id"]
+        if sid in live:
+            refusals.append(f"{sid[:8]} is OPEN in {dst_name} (a live sessions/<pid>.json); close it there first")
+        busy = in_use_elsewhere([{"cliSessionId": sid, "title": s.get("title")}], m["dest"])
+        if busy:
+            refusals.append(f"{sid[:8]} is open in another process: {busy}; close it there first")
+        if sid not in desktop:
+            continue
+        shown = f"{sid[:8]} is shown by Desktop profile {_desktop_names(desktop[sid])}"
+        back = f"ccd-rehome move {src_name} --only {sid} --to-profile {dst_name} --copy"    # src_name keeps its own
+        if dst_def and copy:
+            desk_warn.append(f"{shown}, and Desktop looks for its conversations in {dshort}: this rollback removes "
+                             f"the copy there, so that window cannot open it (the original stays in {src_name}; to "
+                             f"give it back: {back})")
+        elif dst_def:
+            desk_warn.append(f"{shown}, and Desktop looks for its conversations in {dshort}: this rollback takes it "
+                             f"back to {src_name}, so that window cannot open it; to give it back afterwards: {back}")
+        elif src_def and not copy:
+            desk_notes.append(f"{shown}: this rollback puts it back in {dshort}, where Desktop looks for its "
+                              f"conversations")
+        elif not src_def:
+            desk_notes.append(f"{shown}, and Desktop looks for its conversations in {dshort} (or in the folder its own "
+                              f"CLAUDE_CONFIG_DIR names, if it was started with one): this rollback changes what that "
+                              f"window can open only if it was started with CLAUDE_CONFIG_DIR={short(m['source'])} or "
+                              f"{short(m['dest'])}")
+    for r in refusals:
+        say(f"  REFUSE {r}")
+    if refusals:
+        die(f"refusing: {refusals[0]}{' (and more above)' if len(refusals) > 1 else ''}. Nothing was changed.")
+    for x in desk_warn:
+        say(f"  warning: {x}")
+    for x in desk_notes:
+        say(f"  note: {x}")
+
+    what, n, noted = "starting", 0, False
+    try:
+        for s, act in touched:
+            for src, dst, it in act:
+                if copy:
+                    what = f"removing the copy {rel(dst)}"
+                    if not DRY:
+                        _step()
+                    say(f"  remove unchanged copy {rel(dst)}")
+                    remove(dst)
+                elif DRY:
+                    say(f"  [dry-run] move back {rel(dst)}")
+                else:
+                    what = f"moving back {rel(dst)}"
+                    _step()
+                    if _move_path(dst, src) == "exdev" and not noted:
+                        say(EXDEV_NOTE); noted = True
+                    _restore_mtime(src, it)
+                    say(f"  restored {os.path.relpath(src, m['source'])}")
+                n += 1
+        if not DRY:              # a partial copy a killed move (in P2) or a killed rollback (in P) left behind
+            for d in [x for it in m.get("items", []) for x in (it["dst"], it["src"])] + \
+                     [op["dst"] for op in m.get("memory", [])]:
+                for t in glob.glob(glob.escape(d) + ".rehome-tmp-*"):
+                    if _discard(t):
+                        say(f"  removed a partial copy {short(t)}")
+        _rollback_memory(m, leaving)
+        _prune_created(m)
+    except BaseException as e:
+        die(f"rollback stopped while {what} ({_why(e)}); {n} item(s) were already done. Fix the cause, then run the "
+            f"same rollback again (`ccd-rehome rollback {h.name} {name}`): it moves back what is still in {dst_name} "
+            f"and skips what is already in {src_name}.")
+    say(f"rolled back {name}{' (dry run: nothing was written)' if DRY else ''}")
+
+
+def _account_key(a):
+    """An account() as (account uuid, org uuid): two homes are one account when both agree."""
+    return (a[0], a[2]) if a else None
+
+
+def cli_move_hint(h, homes):
+    """What `status` and `rehome` advise for the sessions of CLI home h, as a dict: `command` (None when there is
+    nothing to advise) and `why`: "another-account" (a home signed in to another account, a signed-in one first),
+    "account-unknown" (a home whose account, or h's, is not known), "same-account" (every other home has h's
+    account: a copy there switches no account) or "no-other-home". The command is always a --copy: a move of the
+    whole home would leave h without every conversation it holds, and those that exist nowhere else would then
+    depend on the target's retention alone (a backup's old conversations, re-dated, are deleted there one
+    cleanupPeriodDays later). A command naming a home that does not exist cannot succeed, so none is printed then."""
+    others = [x for x in homes if x.path != h.path and not _same_dir(x.path, h.path)]
+    mine = h.account()
+    if not others:
+        return {"command": None, "why": "no-other-home"}
+    rows = [(x, x.account()) for x in others]
+    differ = [(x, a) for x, a in rows if a and mine and _account_key(a) != _account_key(mine)]
+    unknown = [(x, a) for x, a in rows if not a or not mine]
+    pick = sorted(differ or unknown, key=lambda r: r[0].signed_in() != "signed-in")
+    if pick:
+        x, a = pick[0]
+        return {"command": f"ccd-rehome move {h.name} --to-profile {x.name} --copy",
+                "why": "another-account" if differ else "account-unknown", "target": x.name,
+                "target_account": (a[1] or a[0]) + (f" ({a[3]})" if a[3] else "") if a else None,
+                "target_verdict": x.signed_in(),
+                "unknown": [n for n, acct in ((h.name, mine), (x.name, a)) if not acct]}
+    return {"command": None, "why": "same-account", "same": [x.name for x, _ in rows], "account": mine[1] or mine[0]}
+
+
+def say_cli_move(name, hint, indent):
+    why, cmd = hint["why"], hint.get("command")
+    if why == "another-account":
+        who = hint["target_account"]
+        if hint["target_verdict"] == "signed-in":
+            say(f"{indent}to use these sessions with another account, {who}, copy them to the home where that "
+                f"account is signed in, {hint['target']} ({name} keeps its own):")
+        else:
+            state = ("it is signed out now" if hint["target_verdict"] == "signed-out" else
+                     "whether it is signed in now cannot be read here")
+            say(f"{indent}to use these sessions with another account, {who}, copy them to {hint['target']}, the home "
+                f"that account last used ({state}; {name} keeps its own):")
+        say(f"{indent}  {cmd}")
+        return
+    if why == "account-unknown":
+        say(f"{indent}the account of {' and of '.join(hint['unknown'])} is not known, so whether {hint['target']} is "
+            f"another account cannot be told. To use these sessions in {hint['target']}, copy them there ({name} "
+            f"keeps its own):")
+        say(f"{indent}  {cmd}")
+        return
+    if why == "same-account":
+        same = hint["same"]
+        say(f"{indent}{', '.join(same)} {'has' if len(same) == 1 else 'have'} the same account as {name} "
+            f"({hint['account']}): these sessions need no move to be used with it, and a copy there switches no "
+            f"account. To use them with another account, make a home for it: start Claude Code once like this and "
+            f"sign in there with that account (NAME is yours to pick, e.g. work)")
+    else:
+        say(f"{indent}there is no other CLI home yet. To use these sessions with another account, make one: start "
+            f"Claude Code once like this and sign in there with that account (NAME is yours to pick, e.g. work)")
+    new = os.path.join(HOME, ".claude-NAME")
+    for label, line in _env_commands("claude", new) if WIN else [(None, "CLAUDE_CONFIG_DIR=~/.claude-NAME claude")]:
+        say(f"{indent}  {'(' + label + ') ' if label else ''}{line}")
+    say(f"{indent}then copy them there ({name} keeps its own): ccd-rehome move {name} --to-profile cli:NAME --copy")
+
+
+def cli_rehome(h, homes):
+    say(f"{h.name}: nothing to rehome.")
+    say("  The CLI lists every session in its home whatever account is signed in: sessions are not filed by "
+        "account, so none of them are stranded.")
+    say_cli_move(h.name, cli_move_hint(h, homes), "  ")
 
 
 # ---------------- CLI <-> Desktop ----------------
@@ -1186,7 +3501,7 @@ def transcript_info(path):
                 cwds[d["cwd"]] = cwds.get(d["cwd"], 0) + 1
                 last_cwd = d["cwd"]
             if d.get("entrypoint") and not started:
-                started = "desktop" if d["entrypoint"] == "claude-desktop" else "cli"
+                started = "desktop" if d["entrypoint"] == DESKTOP_ENTRYPOINT else "cli"
             ms = _iso_ms(d.get("timestamp"))
             if ms:
                 t0 = t0 or ms; t1 = ms
@@ -1213,7 +3528,7 @@ def registered_clis(paths):
     out = set()
     for x in paths:
         for kind in STORES:
-            for f in glob.glob(os.path.join(x, STORES[kind], "*", "*", "local_*.json")):
+            for f in _glob(os.path.join(x, STORES[kind]), "*", "*", "local_*.json"):
                 try:
                     d = load(f)
                     out.add(d.get("cliSessionId")); out.update(d.get("priorCliSessionIds") or [])
@@ -1222,28 +3537,69 @@ def registered_clis(paths):
     return out
 
 
-def cli_sessions(found, as_json):
+def cli_sessions(found, homes, as_json):
     known = registered_clis(found)
-    rows = [transcript_info(t) for t in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl"))
-            if os.path.basename(t)[:-6] not in known and re.fullmatch(UUID, os.path.basename(t)[:-6])]
+    rows = []
+    for h in homes:
+        for t in _cli_transcripts(h.path):
+            sid = os.path.basename(t)[:-6]
+            if sid in known or not re.fullmatch(UUID, sid):
+                continue
+            info = transcript_info(t)
+            info["home"], info["home_path"] = h.name, h.path
+            rows.append(info)
     rows.sort(key=lambda r: r["last_ms"], reverse=True)
     if as_json:
         print(json.dumps([{k: v for k, v in r.items() if k != "path"} for r in rows], indent=2, ensure_ascii=False))
         return
-    say(f"{len(rows)} conversation(s) under {short(PROJECTS)} that no Desktop profile lists:")
+    say(f"{len(rows)} conversation(s) in the known CLI homes that no Desktop profile lists:")
     for r in rows:
         when = datetime.datetime.fromtimestamp(r["last_ms"] / 1000).strftime("%Y-%m-%d %H:%M")
-        say(f"  {r['cli'][:8]}  {when}  {r['size_mb']:>7} MB  started in {r['started_in']:7}  "
+        say(f"  {r['home']:22} {r['cli'][:8]}  {when}  {r['size_mb']:>7} MB  started in {r['started_in']:7}  "
             f"{(r['title'] or '')[:40]:40}  {short(r['cwd']) if r['cwd'] else '(folder unknown)'}"
             + ("" if r["cwd_exists"] else "  [folder missing]"))
+    for h in homes:
+        if not h.default:
+            say(f"  note: Desktop reads {h.name} only when started with CLAUDE_CONFIG_DIR={h.path}")
     say("  give one a Desktop record:  ccd-rehome register PROFILE --cli-session-id ID")
 
 
-def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_drift=False):
-    hits = [t for t in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")) if os.path.basename(t).startswith(cli or "-")]
-    if len(hits) != 1:
-        die(f"--cli-session-id {cli!r} matches {len(hits)} conversations (list them: ccd-rehome cli-sessions)")
-    info = transcript_info(hits[0])
+def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_drift=False, homes=None):
+    homes = homes if homes is not None else discover_cli_homes()
+    hits = []
+    for h in homes:
+        for t in _cli_transcripts(h.path):
+            if os.path.basename(t).startswith(cli or "-"):
+                hits.append((h, t))
+    if not hits:
+        die(f"--cli-session-id {cli!r} matches no conversation (list them: ccd-rehome cli-sessions)")
+    # Desktop reads CLAUDE_CONFIG_DIR ?? ~/.claude, and nothing on disk says whether a window set it, so every
+    # profile is taken to read ~/.claude (profile_cli_home says why): a conversation there is always accepted, and one
+    # in any other home is refused with the move INTO ~/.claude. Where the profile's other records' transcripts are
+    # is a hint for the note only (a backup copy of ~/.claude would fool it: review finding #14).
+    default_path = os.path.realpath(CLI_DEFAULT)
+    dname, dshort = cli_home_name(default_path), short(default_path)
+    dlabel = dname if dname == dshort else f"{dname} ({dshort})"
+    ids = sorted({os.path.basename(t)[:-6] for _, t in hits})
+    in_default = [(h, t) for h, t in hits if h.path == default_path]
+    if len(ids) == 1 and len(in_default) == 1:
+        home, hit = in_default[0]
+        pname, ppath = profile_cli_home(p, homes)
+        if ppath != default_path:
+            say(f"  note: none of {p.name}'s other records' transcripts is in {dshort}, and most are in {pname}: if "
+                f"this window was started with CLAUDE_CONFIG_DIR={short(ppath)}, it reads that home and will not find "
+                f"this conversation. The tool assumes {dshort}, Desktop's default")
+    elif len(hits) == 1:
+        home, hit = hits[0]
+        die(f"refusing: that conversation lives in {home.name} ({short(home.path)}), but Desktop looks for its "
+            f"conversations in {dlabel} (unless a window was started with CLAUDE_CONFIG_DIR set). Bring it there "
+            f"first, as a copy ({home.name} keeps its own): ccd-rehome move {home.name} --to-profile {dname} --only "
+            f"{ids[0]} --copy, then run this register again")
+    else:
+        where = ", ".join(sorted({h.name for h, _ in hits}))
+        die(f"--cli-session-id {cli!r} matches {len(hits)} conversations in {where} "
+            f"(list them: ccd-rehome cli-sessions)")
+    info = transcript_info(hit)
     if cwd:
         cwd = os.path.realpath(os.path.expanduser(cwd))
         if mangle(cwd) != info["key"]:
@@ -1268,7 +3624,7 @@ def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_dri
     # Desktop -> CLI loses nothing.
     prior = None
     for a_ in reversed(archives(p)):
-        for f in glob.glob(os.path.join(ARCHIVE, p.key, a_, "*", "local_*.json")):
+        for f in _glob(os.path.join(ARCHIVE, p.key, a_), "*", "local_*.json"):
             try:
                 d = load(f)
             except (OSError, ValueError):
@@ -1285,7 +3641,7 @@ def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_dri
         rec = keep
         say(f"  restored this session's Desktop settings from archive {prior[0]} (effort {rec.get('effort')}, "
             f"title {rec.get('title')!r})")
-    busy = in_use_elsewhere([rec])
+    busy = in_use_elsewhere([rec], home.path)
     if busy:
         die(f"refusing: that conversation is open in another process right now: {busy}. Close it there first.")
     say(f"register {info['cli']} (started in {info['started_in']}, {info['size_mb']} MB, folder {short(cwd)})")
@@ -1293,16 +3649,17 @@ def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_dri
         f = os.path.join(td, "record.json")
         with open(f, "w", encoding="utf-8") as fh:
             json.dump({"format": RECORD_FORMAT, "tool": f"ccd-rehome {VERSION} register", "record": rec}, fh)
-        here = adopt(p, reg, f, to, to_org, None, None, None, accept_drift)
+        here = adopt(p, reg, f, to, to_org, None, None, None, accept_drift, home.path)
     if here and not DRY:
         say("  the transcript was not touched. Do NOT use Desktop's 'Recover CLI sessions' on it: that import "
             "rewrites the file and strips its thinking content.")
 
 
 def move_to_profile(p, reg, ids, dest, to=None, to_org=None, accept_drift=False):
-    """Move session records to ANOTHER profile (user-data-dir) on this host. The conversation lives in the shared
-    ~/.claude/projects, so only the record moves: adopted into the destination first (validated, idempotent,
-    archived), removed from the source only after that succeeded (also archived). Its task suggestions follow."""
+    """Move session records to ANOTHER profile (user-data-dir) on this host. Only the record moves: the conversation
+    stays in the CLI home that holds it (Desktop reads CLAUDE_CONFIG_DIR ?? ~/.claude; each home has its own
+    projects/). The record is adopted into the destination first (validated, idempotent, archived), and removed from
+    the source only after that succeeded (also archived). Its task suggestions follow."""
     if not ids:
         die("--to-profile needs --only ID ... (ids: `ccd-rehome sessions PROFILE`)")
     q = Profile(dest)
@@ -1341,18 +3698,41 @@ def _vkey(v):
     return [int(x) for x in re.findall(r"\d+", v or "")[:3]]
 
 
+def record_transcript(p, cli, homes):
+    """(path, home, (name, path) of the home profile p's records point at) of the transcript of its record's
+    conversation `cli`: the copy in that home first (profile_cli_home: ~/.claude whenever any of the profile's
+    records' transcripts is there, so a copy in ~/.claude always comes first), else the first one found (default
+    home first); path and home are None when no known home has it. A command that continues it must name THAT home.
+    Which copy to name is all the hint decides here: nothing is refused or allowed by it."""
+    pname, ppath = profile_cli_home(p, homes)
+    ph = next((h for h in homes if h.path == ppath), None)
+    tpath = transcript_in(ph.path, cli) if ph and cli else None
+    tpath, thome = (tpath, ph) if tpath else find_cli_transcript(cli, homes) if cli else (None, None)
+    return tpath, thome, (pname, ppath)
+
+
 def resume_cli(p, reg, only):
     d, a, r, rec = _record(p, only)
     cli, cwd = rec.get("cliSessionId"), rec.get("cwd")
-    if not transcript(cli):
-        die(f"the conversation {cli} is not on this machine (no {cli}.jsonl under {short(PROJECTS)})")
-    busy = in_use_elsewhere([rec])
+    homes = discover_cli_homes()
+    tpath, thome, (pname, ppath) = record_transcript(p, cli, homes)
+    if not tpath:
+        die(f"the conversation {cli} is not on this machine (no {cli}.jsonl in any known CLI home)")
+    busy = in_use_elsewhere([rec], thome.path if thome else None)
     if busy:
         die(f"refusing: it is open right now ({', '.join(busy)}). Two writers fork the history: close it in "
             f"Desktop (or the other terminal) first.")
     q = (lambda x: '"' + x + '"') if WIN else (lambda x: "'" + x.replace("'", "'\\''") + "'")
+    env = "" if thome.default else f"CLAUDE_CONFIG_DIR={q(thome.path)} "
     say(f"{rec.get('title')!r}: continue it in the terminal with")
-    say(f"  cd {q(cwd)} && claude --resume {cli}")
+    for label, line in _env_commands(f"claude --resume {cli}", None if thome.default else thome.path, cwd):
+        say(f"  {'(' + label + ') ' if label else ''}{line}")
+    if not thome.default:
+        dshort = short(os.path.realpath(CLI_DEFAULT))
+        hint = (f" ({p.name}'s records' transcripts are mostly there: if that window was started with "
+                f"CLAUDE_CONFIG_DIR={short(thome.path)}, it reads that home)" if thome.path == ppath else "")
+        say(f"  note: this conversation is in {thome.name}, not in {dshort}, where Desktop looks for its conversations"
+            f"{hint}; the command above continues it in {thome.name}")
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
         # Measured: a `claude` started from a shell inside a Desktop session inherits Desktop's environment
         # (CLAUDE_CODE_ENTRYPOINT=claude-desktop, the host session id, a messaging socket, ...), so its turns are
@@ -1360,20 +3740,21 @@ def resume_cli(p, reg, only):
         say(f"  WARNING: this is running inside a Desktop session ({os.environ['CLAUDE_CODE_ENTRYPOINT']}): a "
             f"`claude` started from here inherits Desktop's environment.")
         if WIN:                                    # no `env -i` there: a fresh window is the clean environment
-            say("  Open a new terminal window from the Start menu (not from inside Desktop) and run the command "
-                "above there.")
+            say("  Open a new terminal window from the Start menu (not from inside Desktop) and run the cmd or "
+                "PowerShell line above there.")
         else:
             say("  Run the command in a real terminal, or with a clean environment:")
             say(f"  cd {q(cwd)} && env -i HOME=\"$HOME\" USER=\"$USER\" PATH=\"$PATH\" TERM=xterm-256color "
-                f"claude --resume {cli}")
+                f"{env}claude --resume {cli}")
     # ---- the things that bite when a Desktop session continues in a terminal
     try:
-        oa = load(os.path.join(HOME, ".claude.json")).get("oauthAccount") or {}
+        oa = load(global_config(thome.path) if thome else os.path.join(HOME, ".claude.json")).get("oauthAccount") or {}
     except (OSError, ValueError):
         oa = {}
     st = p.state()
     if not oa.get("accountUuid"):
-        say("  WARNING: the terminal CLI shows no signed-in account (~/.claude.json): run `claude` and /login first")
+        say(f"  WARNING: the terminal CLI shows no signed-in account ({short(global_config(thome.path) if thome else HOME)}): "
+            f"run `claude` and /login first")
     elif st.get("account") and oa["accountUuid"] != st["account"]:
         say(f"  WARNING: different account. The terminal CLI is signed in as {oa.get('emailAddress') or oa['accountUuid'][:8]}, "
             f"this Desktop session runs as {email(reg, st['account'])}. Continuing crosses accounts"
@@ -1381,20 +3762,12 @@ def resume_cli(p, reg, only):
             f"thinking-block signatures made by one may be rejected by the other (cross-org is unverified). Sign the CLI "
             f"in to the same account to be safe.")
     wrote = None
-    with open(transcript(cli), encoding="utf-8", errors="replace") as f:
+    with open(tpath, encoding="utf-8", errors="replace") as f:
         for line in f:
             m = re.search(r'"version":\s*"(\d+\.\d+\.\d+)"', line)
             if m and (wrote is None or _vkey(m.group(1)) > _vkey(wrote)):
                 wrote = m.group(1)
-    exe = shutil.which("claude")
-    have = None
-    if exe:
-        try:
-            have = re.search(r"\d+\.\d+\.\d+", subprocess.run([exe, "--version"], capture_output=True, text=True,
-                                                               timeout=20).stdout or "")
-            have = have.group(0) if have else None
-        except (OSError, subprocess.SubprocessError):
-            have = None
+    exe, have, _ = claude_version()
     if not exe:
         say("  WARNING: no `claude` command on PATH: install Claude Code for the terminal first")
     elif have and wrote and _vkey(have) < _vkey(wrote):
@@ -1412,11 +3785,19 @@ def resume_cli(p, reg, only):
 def unregister(p, only):
     p.require_quit()
     d, a, r, rec = _record(p, only)
-    arch = archive(p, "unregister", [d], {"record": os.path.basename(r), "cli": rec.get("cliSessionId")})
+    cli = rec.get("cliSessionId")
+    _, thome, _ = record_transcript(p, cli, discover_cli_homes())    # while the record still counts for the profile
+    arch = archive(p, "unregister", [d], {"record": os.path.basename(r), "cli": cli})
     remove(r)
     say(f"{p.name}: {'would remove' if DRY else 'removed'} the Desktop record for {rec.get('title')!r}. Archive: {arch}")
-    say(f"  the conversation is untouched; continue it in the terminal:  cd '{rec.get('cwd')}' && claude --resume "
-        f"{rec.get('cliSessionId')}")
+    lines = _env_commands(f"claude --resume {cli}", None if thome is None or thome.default else thome.path,
+                          rec.get("cwd"))
+    if len(lines) == 1:
+        say(f"  the conversation is untouched; continue it in the terminal:  {lines[0][1]}")
+    else:                                   # Windows: a cmd and a PowerShell line
+        say("  the conversation is untouched; continue it in the terminal:")
+        for label, line in lines:
+            say(f"    ({label}) {line}")
     say(f"  undo:  ccd-rehome rollback {p.name} {arch}")
     say("  if Desktop later offers to 'Recover CLI sessions' for it, decline (that import rewrites the transcript); "
         "use `ccd-rehome register` to bring it back")
@@ -1448,7 +3829,7 @@ def export_record(p, only, out):
         print(json.dumps(doc, indent=2, ensure_ascii=False))
 
 
-def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, accept_drift=False):
+def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, accept_drift=False, home=None):
     p.require_quit()
     try:
         doc = load(path)
@@ -1504,9 +3885,9 @@ def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, ac
         rec["title"] = title
     if LOCAL_MODEL_RE.match(rec.get("model") or ""):
         rec["model"] = FALLBACK_MODEL
-    if not transcript(rec["cliSessionId"]):
-        say(f"  note: no transcript {rec['cliSessionId']}.jsonl under {short(PROJECTS)} yet: Desktop will list the "
-            f"session but cannot open it until the conversation is placed (session-transporter does that)")
+    if not transcript(rec["cliSessionId"], home):
+        say(f"  note: no transcript {rec['cliSessionId']}.jsonl under {short(home or PROJECTS)} yet: Desktop will "
+            f"list the session but cannot open it until the conversation is placed (session-transporter does that)")
     here = os.path.join(dst, rec["sessionId"] + ".json")
     say(f"{p.name}: adopt {rec.get('title')!r} -> {email(reg, acct)} / org {org[:8]}  ({short(here)})")
     if note:
@@ -1520,7 +3901,10 @@ def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, ac
 
 
 # ---------------- reports ----------------
-def describe(p, reg, as_json=False):
+def describe(p, reg, as_json=False, homes=None):
+    """A status row for a Desktop profile. With `homes` (status), `elsewhere` counts per CLI home the records whose
+    conversation is in that home and not in ~/.claude, where every Desktop profile is taken to look for it
+    (profile_cli_home says why): `sessions PROFILE` prints the --copy that gives the window a copy."""
     st = p.state()
     acct, org, dst, blocker, _ = plan_target(p, reg) if st["verdict"] == "signed-in" else \
         (None, None, None, f"not signed in ({st['verdict']})", None)
@@ -1532,19 +3916,70 @@ def describe(p, reg, as_json=False):
             stranded.setdefault(f"{email(reg, a)} / org {o[:8]}", 0)
             stranded[f"{email(reg, a)} / org {o[:8]}"] += 1
     cw = [x for x in inventory(p, reg, "cowork") if not dst or x[0] != os.path.join(p.store("cowork"), acct, org)]
-    return {"profile": p.name, "path": p.path, "running": bool(p.pids()), "verdict": st["verdict"],
-            "account": st["account"], "email": email(reg, st["account"]) if st["account"] else None,
+    elsewhere = {}
+    for _, _, _, _, rec in (inv if homes is not None else ()):
+        cli = (rec or {}).get("cliSessionId")
+        th = find_cli_transcript(cli, homes)[1] if cli else None
+        if th is not None and not th.default:
+            elsewhere[th.name] = elsewhere.get(th.name, 0) + 1
+    return {"kind": "desktop", "profile": p.name, "path": p.path, "running": bool(p.pids()),
+            "verdict": st["verdict"], "account": st["account"],
+            "email": email(reg, st["account"]) if st["account"] else None,
             "last_account_email": email(reg, st["last_account"]) if st["last_account"] else None,
             "cookie_expires": st["cookie_expires"], "active_dir": dst, "blocker": blocker,
             "visible": [{"id": sid_of(r)[6:14], "title": (rec or {}).get("title")} for _, _, _, r, rec in vis],
-            "stranded": stranded, "cowork_stranded": len(cw), "archives": archives(p)}
+            "stranded": stranded, "cowork_stranded": len(cw), "archives": archives(p), "elsewhere": elsewhere}
 
 
-def status(paths, reg, as_json):
-    rows = [describe(Profile(x), reg) for x in paths]
+def describe_cli(h, homes, hint=None):
+    """A status row for a CLI home. It has every key a Desktop row has (describe), with neutral values: a CLI home
+    strands nothing and shows nothing in Desktop, so a consumer of `status --json` reads any row the same way.
+    `move` is the command cli_move_hint advises (a --copy, or null), and `move_why` says why (its `why`)."""
+    a, live, hint = h.account(), h.live(), hint or cli_move_hint(h, homes)
+    return {"kind": "cli", "profile": h.name, "path": h.path, "running": bool(live),
+            "verdict": h.signed_in(), "account": a[0] if a else None, "email": a[1] if a else None,
+            "last_account_email": None, "cookie_expires": None, "active_dir": None, "blocker": None,
+            "visible": [], "stranded": {}, "cowork_stranded": 0, "archives": cli_archives(h), "elsewhere": {},
+            "org": a[2] if a else None, "org_name": a[3] if a else None,
+            "sessions": len(h.sessions()), "live": len(live), "move": hint["command"], "move_why": hint["why"]}
+
+
+def say_archives(name, arcs, shown=3):
+    """The archive line of a status row: the newest `shown`, and when there are more, how many and where all are."""
+    if not arcs:
+        return
+    more = (f"; {len(arcs)} in all, the newest {shown} shown, `ccd-rehome status {name} --json` lists all"
+            if len(arcs) > shown else "")
+    say(f"  archives (newest last{more}): {', '.join(arcs[-shown:])}")
+
+
+def status(targets, reg, as_json, homes=None):
+    homes = homes if homes is not None else discover_cli_homes()
+    hints = [cli_move_hint(t, homes) if isinstance(t, CliHome) else None for t in targets]
+    rows = [describe_cli(t, homes, hint) if isinstance(t, CliHome) else describe(t, reg, homes=homes)
+            for t, hint in zip(targets, hints)]
     if as_json:
         print(json.dumps(rows, indent=2)); return
-    for r in rows:
+    for r, hint in zip(rows, hints):
+        if r["kind"] == "cli":
+            who = r["email"] or "(account unknown)"
+            say(f"\n{r['profile']}: {r['verdict'].upper()} {who}  {'RUNNING' if r['running'] else 'quit'}"
+                f"   [{short(r['path'])}]")
+            if r["email"]:
+                who2 = r["email"] + (f" ({r['org_name']})" if r["org_name"] else "") + \
+                    (f" / org {r['org'][:8]}" if r["org"] else "")
+                if r["verdict"] == "signed-in":
+                    say(f"  signed in as {who2}")
+                else:
+                    say(f"  last account in its .claude.json: {who2}; {login_note(r['path'])} ({r['verdict']})")
+            else:
+                say("  no account in its .claude.json" +
+                    (f"; {login_note(r['path'])}" if login_file(r["path"]) == "empty" else ""))
+            say(f"  sessions: {r['sessions']}   live processes: {r['live']}")
+            say("  the CLI lists every session in its home whatever account is signed in: none are stranded")
+            say_cli_move(r["profile"], hint, "  ")
+            say_archives(r["profile"], r["archives"])
+            continue
         who = r["email"] or (f"(last: {r['last_account_email']})" if r["last_account_email"] else "")
         say(f"\n{r['profile']}: {r['verdict'].upper()} {who}  {'RUNNING' if r['running'] else 'quit'}"
             f"  login cookie expires {r['cookie_expires'] or '-'}" + (f"   [{short(r['path'])}]" if os.sep in r['profile'] or r['profile'] == 'default' else ""))
@@ -1558,11 +3993,46 @@ def status(paths, reg, as_json):
         if r["stranded"] or r["cowork_stranded"]:
             say(f"  -> {'blocked: ' + r['blocker'] if r['blocker'] else 'fix: ccd-rehome rehome ' + r['profile']}"
                 f"   (pick sessions: ccd-rehome sessions {r['profile']})")
-        if r["archives"]:
-            say(f"  archives (newest last): {', '.join(r['archives'][-3:])}")
+        dshort = short(os.path.realpath(CLI_DEFAULT))
+        for hn, n in r["elsewhere"].items():
+            say(f"  {n} of these records' conversations {'is' if n == 1 else 'are'} only in {hn}, not in {dshort}, "
+                f"where Desktop looks for them: `ccd-rehome sessions {r['profile']}` prints the --copy that gives this "
+                f"window a copy ({hn} keeps its own)")
+        say_archives(r["profile"], r["archives"])
 
 
-def sessions(p, reg, as_json):
+def cli_sessions_report(h, reg, found, homes, as_json):
+    show = _desktop_records_for(h, found, homes)
+    live_ids = {d.get("sessionId") for d in h.live()}
+    now, rule = time.time(), retention(h.path)["rule"]
+    rows = []
+    for s in h.sessions():
+        age = (now - s["mtime"]) / 86400.0
+        days = rule(s["entrypoint"])[0]          # None: last continued in Desktop, kept at any age
+        rows.append({"id": s["id"],
+                     "last_activity": datetime.datetime.fromtimestamp(s["mtime"]).strftime("%Y-%m-%d %H:%M"),
+                     "size_mb": round(s["size"] / 2 ** 20, 1), "cwd": s["cwd"], "title": s["title"],
+                     "open": s["id"] in live_ids, "desktop": sorted({e[0] for e in show.get(s["id"], [])}),
+                     "older_than_days": days if days is not None and age > days else None,
+                     "last_entrypoint": s["entrypoint"]})
+    if as_json:
+        a = h.account()
+        print(json.dumps({"kind": "cli", "profile": h.name, "path": h.path, "verdict": h.signed_in(),
+                          "signed_in": a[1] if a else None, "sessions": rows}, indent=2)); return
+    say(f"{h.name}: {h.signed_in()} {h.account()[1] if h.account() else ''}   [{short(h.path)}]")
+    say(f"  {'id':8}  {'last activity':16}  {'MB':>7}  folder  title")
+    for r in rows:
+        flags = (" [OPEN]" if r["open"] else "") + \
+                (f" [desktop: {', '.join(r['desktop'])}]" if r["desktop"] else "") + \
+                (f" [older than {r['older_than_days']} days]" if r["older_than_days"] else "")
+        say(f"  {r['id'][:8]:8}  {r['last_activity']:16}  {r['size_mb']:>7}  "
+            f"{r['cwd'] or '(folder unknown)'}  {(r['title'] or '')[:50]}{flags}")
+    say(f"  {len(rows)} session(s). Copy some to another CLI home ({h.name} keeps its own): "
+        f"ccd-rehome move {h.name} --to-profile P2 --only ID ... --copy")
+
+
+def sessions(p, reg, as_json, homes=None):
+    homes = homes if homes is not None else discover_cli_homes()
     st = p.state()
     dst = plan_target(p, reg)[2] if st["verdict"] == "signed-in" else None
     rows = []
@@ -1571,7 +4041,7 @@ def sessions(p, reg, as_json):
                                            if dst else None)
         for d, a, o, r, rec in inventory(p, reg, kind):
             rec = rec or {}
-            t = transcript(rec.get("cliSessionId")) if kind == "code" else None
+            t, thome = (find_cli_transcript(rec.get("cliSessionId"), homes) if kind == "code" else (None, None))
             rows.append({"kind": kind, "id": sid_of(r)[6:], "cli": rec.get("cliSessionId"), "title": rec.get("title"),
                          "account": a,
                          "email": email(reg, a), "org": o, "visible": d == cdst,
@@ -1580,6 +4050,7 @@ def sessions(p, reg, as_json):
                          "archived": bool(rec.get("isArchived")), "model": rec.get("model"),
                          "queued_tasks": (rec.get("armedWorkAtQuit") or {}).get("backgroundTaskCount", 0),
                          "transcript_mb": round(os.path.getsize(t) / 2 ** 20, 1) if t else None,
+                         "transcript_home": thome.name if thome and not thome.default else None,
                          "cwd": rec.get("cwd")})
     if as_json:
         print(json.dumps({"profile": p.name, "path": p.path, "signed_in": email(reg, st["account"]) if st["account"]
@@ -1588,13 +4059,35 @@ def sessions(p, reg, as_json):
     say(f"  {'id':8}  {'shown':5}  {'account':26} {'org':8}  {'last activity':16}  {'MB':>6}  title")
     for x in sorted(rows, key=lambda x: (not x["visible"], x["email"], x["last_activity"] or ""), reverse=False):
         flags = (" [archived]" if x["archived"] else "") + (f" [{x['queued_tasks']} queued]" if x["queued_tasks"] else "") + \
-                (" [cowork]" if x["kind"] == "cowork" else "") + \
-                (" [transcript MISSING]" if x["kind"] == "code" and x["transcript_mb"] is None else "")
+                (" [cowork]" if x["kind"] == "cowork" else "")
+        if x["kind"] == "code":
+            if x["transcript_home"]:        # the CLI id: a move takes that, not the Desktop record id
+                flags += f" [in {x['transcript_home']}, CLI id {(x['cli'] or '?')[:8]}]"
+            elif x["transcript_mb"] is None:
+                flags += " [transcript MISSING]"
         say(f"  {x['id'][:8]:8}  {'yes' if x['visible'] else 'NO':5}  {x['email'][:26]:26} {x['org'][:8]:8}  "
             f"{x['last_activity'] or '-':16}  {x['transcript_mb'] if x['transcript_mb'] is not None else '-':>6}  "
             f"{(x['title'] or '')[:50]}{flags}")
     say(f"  {sum(x['visible'] for x in rows)} shown, {sum(not x['visible'] for x in rows)} not shown. "
         f"Move some: ccd-rehome move {p.name} [--to EMAIL] --only ID ...")
+    pname, ppath = profile_cli_home(p, homes)
+    default_path = os.path.realpath(CLI_DEFAULT)
+    dshort, dname = short(default_path), cli_home_name(default_path)
+    if ppath != default_path:
+        say(f"  note: none of these records' transcripts is in {dshort}, and most are in {pname}. If this window was "
+            f"started with CLAUDE_CONFIG_DIR={short(ppath)}, it reads that home; the tool cannot tell, and assumes "
+            f"{dshort}, Desktop's default (the copy line below brings them there)")
+    # The repair for each record shown [in HOME]: a COPY into ~/.claude, by CLI id. A move would leave HOME without
+    # it, and HOME is often a backup that kept an old conversation ~/.claude's retention deleted: re-dated in
+    # ~/.claude, it is deleted again after cleanupPeriodDays without new activity, and then no home has it.
+    elsewhere = {}
+    for x in rows:
+        if x["kind"] == "code" and x["transcript_home"] and x["cli"]:
+            elsewhere.setdefault(x["transcript_home"], {})[x["cli"]] = None
+    for hn, ids in elsewhere.items():
+        say(f"  note: {len(ids)} of these conversations {'is' if len(ids) == 1 else 'are'} in {hn}, not in {dshort}. "
+            f"To give this window a copy ({hn} keeps its own): ccd-rehome move {hn} --only {' '.join(ids)} "
+            f"--to-profile {dname} --copy")
 
 
 def doctor():
@@ -1620,13 +4113,14 @@ def doctor():
     line(bool(found) or None, f"{len(found)} profile(s) found", "launch Desktop once so it creates its profile")
     for x in found:
         p = Profile(x); d, shared = p.log_dir()
-        has = bool(glob.glob(os.path.join(d, "main*.log")))
+        has = bool(_glob(d, "main*.log"))
         line(has or None, f"{p.name}: logs {short(d)}{' (shared by all instances)' if shared else ''}",
              "no Desktop log yet: launch it once; until then the target org comes from folders/registry")
     try:
         os.makedirs(STATE, 0o700, exist_ok=True)
         t = os.path.join(STATE, f".w{os.getpid()}"); open(t, "w", encoding="utf-8").close(); os.remove(t)
-        line(True, f"state dir {short(STATE)} writable")
+        line(True, f"state dir {short(STATE)} writable" + {"legacy": " (made by an earlier version: kept)",
+                                                             "CCD_REHOME_STATE": " (CCD_REHOME_STATE)"}.get(STATE_WHY, ""))
     except OSError as e:
         line(False, f"state dir {short(STATE)}: {e}", "set CCD_REHOME_STATE to a writable folder")
     # ---- drift: does this Desktop still match the contract the tool was written against?
@@ -1661,7 +4155,7 @@ def doctor():
              "not an error. To help: see SKILL.md \"Maintaining this skill\"")
     for x in found:
         p = Profile(x)
-        if glob.glob(os.path.join(p.log_dir()[0], "main*.log")) and os.path.isdir(p.store()) and p.dirs():
+        if _glob(p.log_dir()[0], "main*.log") and os.path.isdir(p.store()) and p.dirs():
             line(bool(p.loaded_lines()) or None, f"{p.name}: Desktop's 'Loaded N persisted sessions from' log line found",
                  "DRIFT: the log format the tool reads (target org, verify) may have changed. Compare a fresh main.log "
                  "with references/mechanics.md §2-3 and update the patterns in Profile.real_inits / loaded_lines")
@@ -1700,6 +4194,119 @@ def report(found, checks):
     say("# `verified` should name what you actually ran, e.g.: report selftest dry-run rehome verify rollback")
 
 
+# ---------------- your own layout: profiles --add / --add-root / --forget ----------------
+def _arg_path(spec):
+    """A path given on the command line (a leading ~, $HOME, ${HOME} expanded; relative to the current folder)."""
+    return os.path.realpath(os.path.abspath(_expand_home(spec)))
+
+
+def _shown(rp):
+    return "~" if os.path.normcase(rp) == os.path.normcase(os.path.realpath(HOME)) else short(rp)
+
+
+def _registered(rp, entries):
+    return [x for x in entries if os.path.normcase(os.path.realpath(_expand_home(x))) == os.path.normcase(rp)]
+
+
+ROOT_HINT = " (a folder whose subfolders are profiles or homes is a profile root: `ccd-rehome profiles --add-root PATH`)"
+
+
+def add_profile(spec):
+    """`profiles --add PATH`: register a Desktop profile (it has config.json) or a CLI home (a Claude Code config dir)
+    anywhere, so that every run finds it. Anything else is refused, with the reason."""
+    rp = _arg_path(spec)
+    shown = _shown(rp)
+
+    def refuse(why):
+        die(f"cannot add {shown}: {why}. Nothing was changed.")
+    if not os.path.isdir(rp):
+        refuse("it does not exist" if not os.path.exists(rp) else "it is not a folder")
+    if _in_state(rp):
+        refuse(f"it is the tool's state folder {short(os.path.realpath(STATE))} (or inside it)")
+    if _is_profile_dir(rp):
+        if rp.endswith("-3p"):
+            refuse("a -3p profile talks to a local gateway and has no Anthropic account; add the base profile")
+        kind, found = "Desktop profile", _desktop_paths()
+    else:
+        why = not_a_cli_home(rp)
+        if why:
+            refuse(f"it {why}" + (ROOT_HINT if "holds the Desktop profile" in why else ""))
+        if not _has_cli_markers(rp):
+            refuse("it is neither a Desktop profile (no config.json) nor a CLI home (no projects/, .claude.json, "
+                   ".credentials.json or settings.json)" + ROOT_HINT)
+        rp = _home_path(rp)
+        kind, found = "CLI home", _cli_home_paths()
+    if _registered(rp, _remembered()):
+        say(f"{shown} is registered already ({kind}): nothing to add"); return
+    if rp in found and FOUND.get(rp, (None,))[0] in ("default", "root"):
+        say(f"{shown} is found already ({_found_text(rp)}): nothing to add"); return
+    if DRY:
+        say(f"[dry-run] would add the {kind} {shown}"); return
+    write_json(KNOWN_PROFILES, _remembered() + [rp], 2)
+    say(f"added the {kind} {shown}: it is found on every run from now on "
+        f"(`ccd-rehome profiles --forget {shown}` removes it)")
+
+
+def add_root(spec):
+    """`profiles --add-root DIR`: register a folder whose subfolders are Desktop profiles or CLI homes; every one of
+    them is found on every run, those added later too."""
+    rp = _arg_path(spec)
+    shown = _shown(rp)
+
+    def refuse(why):
+        die(f"cannot add the profile root {shown}: {why}. Nothing was changed.")
+    if not os.path.isdir(rp):
+        refuse("it does not exist" if not os.path.exists(rp) else "it is not a folder")
+    if _same_dir(rp, HOME) or _holds(rp, os.path.realpath(HOME)):
+        refuse("it is your home folder or a folder above it, not a folder of profiles. Name the folder that holds "
+               "them")
+    if _in_state(rp):
+        refuse(f"it is the tool's state folder {short(os.path.realpath(STATE))} (or inside it)")
+    if _is_profile_dir(rp) or _is_default_home(rp) or is_cli_home(rp):
+        refuse(f"it is a {'Desktop profile' if _is_profile_dir(rp) else 'CLI home'} itself; register one profile or "
+               f"home with `ccd-rehome profiles --add {shown}`")
+    if _registered(rp, _paths_file(KNOWN_ROOTS)):
+        say(f"{shown} is registered already as a profile root: nothing to add"); return
+    if any(r == rp for r, _, _ in profile_roots()):
+        say(f"{shown} is a profile root already (it exists, or $CCD_REHOME_INSTANCES names it): nothing to add")
+        return
+    kids = _root_children(rp)
+    nd = sum(1 for d in kids if _is_profile_dir(d))
+    nc = sum(1 for d in kids if not _is_profile_dir(d) and is_cli_home(d))
+    if DRY:
+        say(f"[dry-run] would add the profile root {shown} ({nd} Desktop profile(s), {nc} CLI home(s) in it now)")
+        return
+    write_json(KNOWN_ROOTS, _paths_file(KNOWN_ROOTS) + [rp], 2)
+    say(f"added the profile root {shown}: every Desktop profile and CLI home in its subfolders is found on every run "
+        f"from now on ({nd} Desktop profile(s), {nc} CLI home(s) in it now; `ccd-rehome profiles --forget {shown}` "
+        f"removes it)")
+
+
+def forget(spec):
+    """`profiles --forget PATH`: drop a profile or home added (or named before), or a profile root added, and the
+    profiles remembered inside that root. What another source finds (a shell file, the environment) stays found."""
+    rp = _arg_path(spec)
+    rp = _home_path(rp) if _is_default_home(rp) else rp
+    shown = _shown(rp)
+    known, roots = _remembered(), _paths_file(KNOWN_ROOTS)
+    gone_k, gone_r = _registered(rp, known), _registered(rp, roots)
+    inside = [x for x in known if gone_r and os.path.normcase(os.path.dirname(os.path.realpath(_expand_home(x))))
+              == os.path.normcase(rp)]
+    if not gone_k and not gone_r:
+        root = next((by for r, by, _ in profile_roots() if r == rp), None)
+        how = (f" (found: {_found_text(rp)})" if rp in FOUND else
+               " (a profile root while $CCD_REHOME_INSTANCES names it)" if root == "env" else
+               " (a profile root because it exists)" if root else "")
+        die(f"{shown} is not registered with --add or --add-root{how}: there is nothing to forget. "
+            f"Nothing was changed.")
+    if DRY:
+        say(f"[dry-run] would forget {shown}"); return
+    write_json(KNOWN_PROFILES, [x for x in known if x not in gone_k and x not in inside], 2)
+    write_json(KNOWN_ROOTS, [x for x in roots if x not in gone_r], 2)
+    say(f"forgot {'the profile root ' if gone_r else ''}{shown}" +
+        (f" and {len(inside)} profile(s) remembered in it" if inside else ""))
+
+
 def main():
     global DRY
     os.umask(0o077)
@@ -1722,35 +4329,72 @@ def main():
     ap.add_argument("--accept-drift", action="store_true", help="proceed although validation reported DRIFT")
     ap.add_argument("--out"); ap.add_argument("--record"); ap.add_argument("--cwd"); ap.add_argument("--to-profile")
     ap.add_argument("--cli-session-id"); ap.add_argument("--title")
+    ap.add_argument("--project"); ap.add_argument("--copy", action="store_true")
+    ap.add_argument("--no-memory", action="store_true"); ap.add_argument("--keep-dates", action="store_true")
+    ap.add_argument("--add", action="append", metavar="PATH", help="profiles: register a Desktop profile or CLI home")
+    ap.add_argument("--add-root", action="append", metavar="DIR",
+                    help="profiles: register a folder whose subfolders are Desktop profiles or CLI homes")
+    ap.add_argument("--forget", action="append", metavar="PATH", help="profiles: drop what --add or --add-root added")
     ap.add_argument("--version", action="version", version=f"ccd-rehome {VERSION}")
     o = ap.parse_args()
+    if (o.add or o.add_root or o.forget) and o.cmd != "profiles":
+        ap.error("--add, --add-root and --forget go with `profiles`")
     if o.cmd == "doctor":                           # before anything below writes state: doctor writes nothing
         return doctor()
     DRY = o.dry_run
     if not DRY:
         os.makedirs(STATE, 0o700, exist_ok=True)
-    named = [] if o.cmd == "report" else \
-        [Profile(a).path for a in (o.args[:1] if o.cmd in ("rollback", "move", "sessions", "quit", "launch", "verify",
-                                                            "export-record", "adopt", "register", "resume-cli",
-                                                            "unregister") else o.args)]
+    one = o.cmd in ("rollback", "move", "sessions", "quit", "launch", "verify", "export-record", "adopt",
+                    "register", "resume-cli", "unregister")
+    specs = [] if o.cmd == "report" else (o.args[:1] if one else o.args)
+    targets = [resolve_target(s) for s in specs]
     found = discover()
-    reg = refresh_registry(found + [x for x in named if x not in found])
+    homes = discover_cli_homes()
+    for t in targets:
+        if isinstance(t, CliHome):
+            homes = _homes_with(homes, t)
+    if o.add or o.add_root or o.forget:             # before the registry refresh: a refusal writes nothing
+        for x in o.add_root or []:
+            add_root(x)
+        for x in o.add or []:
+            add_profile(x)
+        for x in o.forget or []:
+            forget(x)
+        return
+    # each path once: a named profile is in `found` too, and every pass reads all of its IndexedDB / Local Storage
+    reg = refresh_registry(list(dict.fromkeys(found + [t.path for t in targets] + [h.path for h in homes])))
     if o.cmd == "profiles":
         rows = []
         for x in found:
             p = Profile(x); st = p.state()
-            rows.append({"profile": p.name, "path": p.path, "running": bool(p.pids()), "verdict": st["verdict"],
-                         "email": email(reg, st["account"]) if st["account"] else None})
+            rows.append({"kind": "desktop", "profile": p.name, "path": p.path, "running": bool(p.pids()),
+                         "verdict": st["verdict"], "email": email(reg, st["account"]) if st["account"] else None,
+                         **_found(p.path)})
+        for h in homes:
+            a, live = h.account(), h.live()
+            rows.append({"kind": "cli", "profile": h.name, "path": h.path, "running": bool(live),
+                         "verdict": h.signed_in(), "email": a[1] if a else None,
+                         "sessions": len(h.sessions()), "org": a[2] if a else None, "live": len(live),
+                         **_found(h.path)})
         if o.json:
             print(json.dumps(rows, indent=2)); return
         for r in rows:
-            say(f"{r['profile']:22} {r['verdict']:10} {r['email'] or '-':28} {'RUNNING' if r['running'] else 'quit':8}"
-                f" {short(r['path'])}")
+            n = (f"{r['sessions']} session(s)" if r["kind"] == "cli" else "")
+            say(f"{r['kind']:8} {r['profile']:22} {r['verdict']:10} {r['email'] or '-':28} {n:>12} "
+                f"{'RUNNING' if r['running'] else 'quit':8} {short(r['path'])}  found: {_found_text(r['path'])}")
+        added = {os.path.realpath(x) for x in _paths_file(KNOWN_ROOTS)}
+        roots = [f"{short(r)} ({'$CCD_REHOME_INSTANCES' if by == 'env' else 'added' if r in added else 'it exists'})"
+                 for r, by, _ in profile_roots()]
+        if roots:
+            say(f"profile roots: {', '.join(roots)}")
+        say(f"state folder: {short(STATE)}" + {"legacy": " (made by an earlier version: kept, so its archives "
+                                                          "still roll back)",
+                                                "CCD_REHOME_STATE": " (from CCD_REHOME_STATE)"}.get(STATE_WHY, ""))
         return
     if o.cmd == "report":
         return report(found, o.args)
     if o.cmd == "cli-sessions":
-        return cli_sessions(found + [x for x in named if x not in found], o.json)
+        return cli_sessions(found, homes, o.json)
     if o.cmd == "accounts":
         if o.json:
             print(json.dumps(reg, indent=2)); return
@@ -1759,14 +4403,16 @@ def main():
                 f"{', '.join(k[:8] + (' ' + v if v else '') for k, v in e.get('orgs', {}).items()) or '-'}")
         return
     if o.cmd == "status":
-        return status(named or found, reg, o.json)
+        return status(targets or ([Profile(x) for x in found] + homes), reg, o.json, homes)
     if o.cmd == "rehome":
-        targets = found if o.all else named
-        if not targets:
+        ts = [Profile(x) for x in found] if o.all else targets
+        if not ts:
             die("name a profile (or --all)")
         failed = []
-        for x in targets:
-            p = Profile(x)
+        for t in ts:
+            if isinstance(t, CliHome):                  # nothing is stranded in a CLI home; explain, do not touch
+                cli_rehome(t, homes); continue
+            p = t
             if o.all:                                   # --all: do what is safe, explain the rest, never stop early
                 d = describe(p, reg)
                 if not d["stranded"] and not (o.include_cowork and d["cowork_stranded"]):
@@ -1785,19 +4431,38 @@ def main():
         if failed:
             sys.exit(f"ccd-rehome: not done: {', '.join(failed)}")
         return
-    if not named:
+    if not targets:
         die(f"{o.cmd} needs a profile")
-    p = Profile(named[0])
+    t = targets[0]
     if o.cmd == "sessions":
-        return sessions(p, reg, o.json)
+        if isinstance(t, CliHome):
+            return cli_sessions_report(t, reg, found, homes, o.json)
+        return sessions(t, reg, o.json, homes)
     if o.cmd == "move":
+        if isinstance(t, CliHome):
+            if not o.to_profile:
+                die(f"moving sessions out of {t.name} needs --to-profile P2 (another CLI home)")
+            q = as_cli_home(o.to_profile)
+            if q is None:
+                die(f"--to-profile {o.to_profile!r} is not a CLI home (use cli, cli:NAME, or a path to one)")
+            return move_cli(t, q, o.only, o.project, o.copy, o.no_memory, o.keep_dates)
         if o.to_profile:
-            return move_to_profile(p, reg, o.only, o.to_profile, o.to, o.to_org, o.accept_drift)
-        move(p, reg, o.to, o.to_org, o.frm, o.only, o.include_cowork, accept_drift=o.accept_drift); return
+            if as_cli_home(o.to_profile) is not None:
+                die("--to-profile is a CLI home; a Desktop profile moves records to another Desktop profile")
+            return move_to_profile(t, reg, o.only, o.to_profile, o.to, o.to_org, o.accept_drift)
+        move(t, reg, o.to, o.to_org, o.frm, o.only, o.include_cowork, accept_drift=o.accept_drift); return
+    if o.cmd == "rollback":
+        if len(o.args) != 2:
+            die("rollback PROFILE ARCHIVE")
+        return rollback_cli(t, o.args[1]) if isinstance(t, CliHome) else rollback(t, o.args[1])
+    if isinstance(t, CliHome):
+        die(f"{o.cmd} works on a Desktop profile; {t.name} is a CLI home "
+            f"(use profiles / status / sessions / rehome / move / rollback for it)")
+    p = t
     if o.cmd == "register":
         if not o.cli_session_id:
             die("register needs --cli-session-id ID (list them: ccd-rehome cli-sessions)")
-        return register(p, reg, o.cli_session_id, o.cwd, o.to, o.to_org, o.title, o.accept_drift)
+        return register(p, reg, o.cli_session_id, o.cwd, o.to, o.to_org, o.title, o.accept_drift, homes)
     if o.cmd == "resume-cli":
         return resume_cli(p, reg, (o.only or [None])[0])
     if o.cmd == "unregister":
@@ -1808,10 +4473,6 @@ def main():
         if not o.record:
             die("adopt needs --record FILE")
         adopt(p, reg, o.record, o.to, o.to_org, o.cwd, o.cli_session_id, o.title, o.accept_drift); return
-    if o.cmd == "rollback":
-        if len(o.args) != 2:
-            die("rollback PROFILE ARCHIVE")
-        return rollback(p, o.args[1])
     if o.cmd == "quit":
         mine = set(p.pids()) & set(ancestors())
         if mine:

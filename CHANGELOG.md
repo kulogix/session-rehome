@@ -4,6 +4,88 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.11.0 — 2026-11-08
+
+**CLI homes: terminal accounts as profiles.** The terminal CLI keeps one config dir per account (`CLAUDE_CONFIG_DIR`;
+`~/.claude` by default) with its own `projects/`, settings and login, and files no session by account: sessions reach
+another account by being moved or copied to its home. `ccd-rehome` takes `cli`, `cli:NAME` (`~/.claude-NAME`) or a
+config dir's path wherever it takes a profile.
+
+- **Listing:** `profiles` lists CLI homes beside Desktop windows; `status cli:NAME` names a home's account and
+  archives and prints the `--copy` into another account's home (JSON `move`, `move_why`); `sessions cli` flags
+  `OPEN`, the Desktop profile showing a session and `older than N days`. Credentials are never opened.
+- **Move and `--copy` between homes:** `move cli[:NAME] [--only ID …] [--project DIR] --to-profile cli[:NAME]` moves
+  each transcript byte for byte with its sidecars, tasks, todos and file history, and copies the project memory;
+  `--copy` keeps the source. Every move the tool advises between homes is a copy.
+- **Refusals** (nothing written; a dry run lists them and exits 1), among them: an open session; a move out of
+  `~/.claude` of a conversation a Desktop record names; a different transcript with that id in the target; links,
+  special files, paths escaping a home; an item the target has; `--keep-dates` where it loses the only copy.
+- **Warnings, retention included:** a transcript older than the shortest `cleanupPeriodDays` (or
+  `desktopSessionCleanupPeriodDays`) of the target's `settings.json`, `remote-settings.json`, `managed-settings.json`
+  or `managed-settings.d/` is re-dated (on a `--copy`, only the copy), which only postpones deletion; one last
+  continued in Desktop only if `claude --version` is below 2.1.248 or unknown. Also warned: homes in different
+  organizations, a signed-out target.
+- **All-or-nothing moves, exact undo:** a failed step (a full disk, Ctrl-C, SIGTERM, SIGHUP) undoes the move, checked
+  on disk; `rollback P ARCHIVE` restores the state before the move (mtimes too) and finishes a cut-off one.
+- **Desktop windows and CLI homes:** Desktop reads `CLAUDE_CONFIG_DIR ?? ~/.claude` and nothing on disk says which,
+  so every rule takes each window to read `~/.claude`. For a record whose conversation is only in another home,
+  `sessions PROFILE` prints the copy into `~/.claude` (`move cli:NAME --only CLI_ID --to-profile cli --copy`);
+  `status` counts them; `register` files only a conversation in `~/.claude`.
+- **Any layout:** Desktop profiles and CLI homes can be in any folder (`~/.claude-instances` is only an example, used
+  while it exists, never created): `profiles --add PATH` / `--add-root DIR` / `--forget PATH` or
+  `$CCD_REHOME_INSTANCES` register them; discovery also reads `--user-data-dir` in shell startup files and Desktop's
+  shared macOS log; `profiles` says where each was found (`found_by`). `st-bundle --desktop-profile NAME` resolves a bare name through session-rehome, so the transporter follows the same rules. A bare name, or `cli:NAME`, also matches a
+  known folder of that name, never two. The state moved to the platform's state folder
+  (`~/.local/state/session-rehome` on Linux); an existing `~/.claude-instances/_rehome` keeps being used.
+
+**Changed behaviour:** `rehome --all` skips CLI homes; `--help` says what each kind of move writes; a refusal says
+"Nothing was changed." once; glob characters in paths work; a Desktop `rollback` restores a recreated folder's mode;
+the guides no longer say that every window and the terminal share one home's conversations.
+
+**How it was made.** The feature was implemented by a local DeepSeek V4.1 model from a written spec (the facts now in
+`skills/session-rehome/references/mechanics.md` §4b), reviewed by Claude in seven adversarial rounds, and repaired by
+Claude. Round 1 had five reviewers and 48 verifiers, and 47 findings were confirmed; rounds 2 to 7 each reviewed the
+previous repair and fixed what they found with fix agents, verifiers and critics. Each fix came with a check that
+failed before it, and was broken on purpose to prove that check. The round-by-round history is in the skill's
+[`references/cli-homes-review-log.md`](skills/session-rehome/references/cli-homes-review-log.md).
+
+**Tested:** `python3 tests/run_all.py` on Linux (Python 3.14.4): session-rehome 537 checks (425 new: 5 in "the
+self-test's own hash sees hidden paths, modes and symlink targets", 24 in "Any layout: profiles and homes outside
+~/.claude-instances", 47 in "CLI homes (CLAUDE_CONFIG_DIR)", 41 in "CLI
+moves that fail part-way, partial states, and rollback", 35 in "CLI moves: which sessions, symlinks, glob characters
+and refusals", 48 in "Desktop windows and CLI homes: every window taken to read ~/.claude, records that keep a
+session there, shadowed names", 54 in "Reports and discovery: CLI-home archives in status, the status --json shape,
+shell-file discovery, the move hint, sign-in warnings, Windows commands", 13 in "What the tool says about itself, the
+target of a CLI move, and rules that had no check", 31 in "Second review of CLI moves: links in the target, rules
+that had no check, special files, interruptions, the only copy left", 22 in "Second review of messages: an empty
+login file, a refusal said once, unregister on Windows, how many archives status shows", 10 in "Second review of the
+docs: where a Desktop move leaves the conversation, and which refusal a name that is no home prints", 6 in "Third
+review: Windows directory junctions inside a session, its project memory and the target", 18 in "Fourth review:
+copies for a conversation in another home, ~/.claude by a second name, CLI ids in the advice, a record's earlier
+conversations, walks that stop at a junction", 25 in "Fifth review: the status and rehome advice is a copy into the
+home of another account, --keep-dates refused where it loses the only copy, a record's earlier conversation,
+transcripts last continued in Desktop kept at any age", 25 in "Sixth review: a plain move of an old transcript last
+continued in Desktop, managed settings, the sidecar files of a re-dated transcript, and the conversations of a
+Desktop window that are only in another home", 21 in "Seventh review: the shortest retention any settings source sets
+(managed-settings.d too), and a --copy re-dated where the destination would delete it"), session-transporter 40
+checks, repository tests pass; the session-rehome self-test also passes with the macOS and Windows layouts emulated,
+and each documented CLI-home rule, removed from a copy of the tool, fails a check (`mechanics.md` §4b). **With the
+real Claude Code CLI:** one measurement, the orchestrator's run on 2026-11-08 with Claude Code 2.1.319: a moved
+transcript (0.5 MB) resumed in the target home, not in the source. `tests/e2e_real_cli.py` repeats it; it is manual,
+and here only its skip path and a stand-in `claude` ran.
+
+**Not tested / not read:** the macOS shared-log discovery on a real Mac with several instances; a move on a real
+signed-in CLI home (no live `move-cli` entry in `tested.json`: dry-run
+first); `tests/e2e_real_cli.py` with the real CLI; Python 3.9 itself (CI runs it); the cmd and PowerShell lines in a
+real shell; the macOS Keychain; a Desktop window started with `CLAUDE_CONFIG_DIR`; a real EXDEV, terminal SIGHUP,
+agent timeout, directory junction or second name of `~/.claude` (all simulated), or a cut-off copy on a filesystem
+without inode numbers; the real-failure checks on macOS and the symlink refusals on Windows; whether Desktop still
+reads `priorCliSessionIds`; the Desktop retention rule with the real CLI (it is from Claude Code's documentation),
+which Claude Code runs a home's cleanup, and a real managed-settings file, drop-in or `remote-settings.json`; the
+troubleshooting rows' explanations. `tasks/` and `file-history/` are not re-dated. Not read by the tool:
+project-level settings (`.claude/settings*.json` in a project, `--settings`), which can also set `cleanupPeriodDays`;
+MDM profiles and the Windows registry; the HIPAA configuration.
+
 ## 0.10.0 — 2026-11-08
 
 **Renamed: the project is now `session-rehome`** (https://github.com/kulogix/session-rehome; GitHub redirects the

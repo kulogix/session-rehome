@@ -25,7 +25,7 @@ Never edits a transcript. Never reads or packs credentials, ~/.claude.json, hist
 import argparse, datetime, glob, hashlib, io, json, os, platform, re, shutil, subprocess, sys, tempfile, unicodedata
 import zipfile
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 FORMAT = "claude-session-bundle/1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -119,7 +119,36 @@ def profile_path(spec):
         return os.path.expanduser("~/.config/Claude")
     if os.sep in spec or "/" in spec or spec.startswith(("~", ".")):
         return os.path.abspath(os.path.expanduser(spec))
+    # A bare name follows session-rehome's rules (roots, profiles registered with `profiles --add`, discovered ones),
+    # so a profile kept outside ~/.claude-instances is found the same way by both tools.
+    found = sorted({path for name, path in known_profiles() if spec in (name, os.path.basename(path))})
+    if len(found) > 1:
+        die(f"--desktop-profile {spec} names {len(found)} profiles ({', '.join(found)}): give the path")
+    if found:
+        return found[0]
     return os.path.join(os.path.expanduser("~/.claude-instances"), spec)
+
+
+_KNOWN = None
+
+
+def known_profiles():
+    """(name, path) of every Desktop profile session-rehome knows, from its read-only `profiles --json --dry-run`
+    (nothing written). Empty when session-rehome is not installed."""
+    global _KNOWN
+    if _KNOWN is None:
+        _KNOWN = []
+        rh = find_rehome()
+        if rh:
+            try:
+                r = subprocess.run([sys.executable, "-I", rh, "profiles", "--json", "--dry-run"], capture_output=True,
+                                   text=True, encoding="utf-8", errors="replace", timeout=120)
+                for row in json.loads(r.stdout or "[]"):
+                    if isinstance(row, dict) and row.get("kind", "desktop") == "desktop" and row.get("path"):
+                        _KNOWN.append((row.get("profile"), row["path"]))
+            except (OSError, subprocess.SubprocessError, ValueError):
+                pass
+    return _KNOWN
 
 
 def find_rehome():
@@ -136,7 +165,9 @@ def detect_cli_version():
     """The Claude Code version that will resume the session here: PATH / ~/.local/bin, else the newest CLI a Desktop
     profile bundles (<profile>/claude-code/<version>/). Stamped into the appended notice record."""
     cands = [shutil.which("claude") or "", os.path.expanduser("~/.local/bin/claude")]
-    for prof in (profile_path("default"), *glob.glob(os.path.expanduser("~/.claude-instances/*"))):
+    profs = {profile_path("default"), *glob.glob(os.path.expanduser("~/.claude-instances/*"))}
+    profs |= {path for _, path in known_profiles()}
+    for prof in sorted(profs):
         vs = sorted(glob.glob(os.path.join(prof, "claude-code", "*", "claude*")),
                     key=lambda x: [int(n) if n.isdigit() else 0 for n in re.split(r"[.-]", os.path.basename(os.path.dirname(x)))])
         cands += vs[-1:]

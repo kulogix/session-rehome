@@ -281,6 +281,19 @@ try:
     check(oct(os.stat(os.path.join(dest2, "src", "fib.py")).st_mode & 0o777) in ("0o644", "0o600", "0o640")
           or sys.platform.startswith("win"), "copied files are writable and not group/world-writable")
 
+    print("a Desktop profile outside ~/.claude-instances, named by its folder name")
+    HC = os.path.join(root, "dest-anylayout"); chc = os.path.join(HC, ".claude"); os.makedirs(chc)
+    py_ = desktop_profile(HC, "acct-y", B, OB)
+    pyd = os.path.join(HC, "data", "acct-y"); os.makedirs(os.path.dirname(pyd)); shutil.move(py_, pyd)
+    os.rmdir(os.path.join(HC, ".claude-instances"))
+    rc, o = py(REHOME, "profiles", "--add", pyd, home=HC)
+    destc = os.path.join(HC, "Projects", "fib")
+    rc, o = py(BUNDLE, "import", out, "--dest-root", destc, "--claude-home", chc, "--desktop-profile", "acct-y",
+               "--staging", os.path.join(HC, "staging"), "--apply", home=HC)
+    got = glob.glob(os.path.join(pyd, "claude-code-sessions", B, OB, "local_*.json"))
+    check(rc == 0 and len(got) == 1 and not os.path.exists(os.path.join(HC, ".claude-instances")),
+          "import --desktop-profile NAME finds a profile registered outside ~/.claude-instances (profiles --add)")
+
     print("legacy CLAUDE.md marker (projects migrated before the rename)")
     HL = os.path.join(root, "dest-legacy"); chl = os.path.join(HL, ".claude"); os.makedirs(chl)
     destl = os.path.join(HL, "fib"); os.makedirs(destl)

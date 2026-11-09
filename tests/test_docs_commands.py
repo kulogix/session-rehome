@@ -47,7 +47,9 @@ class DocsMatchTools(unittest.TestCase):
         rc, out = run_tool(REHOME, "--help")
         cls.rehome_help = out
         rc, out = run_tool(REHOME, "no-such-command")
-        cls.rehome_cmds = set(re.findall(r"'([a-z-]+)'", out.split("choose from", 1)[-1]))
+        # Python 3.13 quotes each choice ("choose from 'a', 'b'"); 3.14 does not (choose from a, b). Accept both.
+        tail = out.split("choose from", 1)[-1].rstrip(")\n ")
+        cls.rehome_cmds = {w.strip("'\" ") for w in tail.split(",") if re.fullmatch(r"['\"]?[a-z-]+['\"]?", w.strip())}
         subs = re.search(r"\{([a-z,-]+)\}", run_tool(BUNDLE, "--help")[1])
         cls.bundle_help = {sub: run_tool(BUNDLE, sub, "--help")[1] for sub in (subs.group(1).split(",") if subs else [])}
         cls.transplant_help = run_tool(TRANSPLANT, "--help")[1]

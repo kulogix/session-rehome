@@ -80,3 +80,38 @@ def frontmatter(path):
         elif key and line.startswith((" ", "\t")):
             fm[key] = (fm[key] + " " + line.strip()).strip()
     return fm, s[m.end():]
+
+
+def changelog_newest(text):
+    """(version, body) of the newest `## X.Y.Z` section of CHANGELOG.md, whitespace collapsed to single spaces."""
+    m = re.search(r"^## (\d+\.\d+\.\d+)[^\n]*\n(.*?)(?=^## |\Z)", text or "", re.M | re.S)
+    return (m.group(1), " ".join(m.group(2).split())) if m else (None, "")
+
+
+def check_count_claims(body):
+    """The self-test counts a CHANGELOG entry states: `session-rehome N checks (M new: a in "SECTION", ...)` (or
+    `a new in "SECTION"`) and
+    `session-transporter K`. Returns {"session-rehome": N, "session-transporter": K, "new": M, "sections": {...}};
+    a count the entry does not state is absent."""
+    out = {"sections": {}}
+    for key, rx in (("session-rehome", r"session-rehome (\d+) checks"), ("session-transporter", r"session-transporter (\d+)"),
+                    ("new", r"session-rehome \d+ checks \((\d+) new")):
+        m = re.search(rx, body)
+        if m:
+            out[key] = int(m.group(1))
+    for n, title in re.findall(r'(\d+) (?:new )?in "([^"]+)"', body):
+        out["sections"][" ".join(title.split())] = int(n)
+    return out
+
+
+def selftest_sections(output):
+    """{section title: PASS count} from a self-test's output (a section starts at each line that is not indented)."""
+    counts, cur = {}, None
+    for line in output.splitlines():
+        if line.startswith("  PASS "):
+            counts[cur] = counts.get(cur, 0) + 1
+        elif line.strip() and not line.startswith(" ") and line.strip() != "ALL PASS" \
+                and not re.fullmatch(r"\d+ FAILED", line.strip()):
+            cur = " ".join(line.split())
+            counts.setdefault(cur, 0)
+    return counts

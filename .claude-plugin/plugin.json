@@ -1,7 +1,7 @@
 {
   "name": "session-rehome",
   "displayName": "Claude session rehome",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Move Claude Code and Claude Desktop sessions without losing history: to another signed-in account, another Desktop window (user-data-dir), between the terminal CLI and Desktop, and to another machine or operating system.",
   "author": {
     "name": "kulogix",

@@ -5,6 +5,7 @@
 Move your Claude Code and Claude Desktop sessions **without losing anything**:
 - to another **account** ("I signed in to my work account and my sessions are gone");
 - to another **Desktop window** (each `--user-data-dir` is a separate window with its own sign-in);
+- to another **terminal account** (each `CLAUDE_CONFIG_DIR` home is a separate login and session history);
 - between the **terminal (CLI) and Desktop**, in both directions;
 - to **another computer or operating system**: Linux, macOS, Raspberry Pi; Windows is untested.
 
@@ -20,6 +21,7 @@ transporter's ssh-based procedure. MIT licensed.
 | to the account a Desktop window is signed in to now | `ccd-rehome` | `status`, then `rehome WINDOW` |
 | to a particular account | `ccd-rehome` | `move WINDOW --to EMAIL --only ID` |
 | to another Desktop window on the same machine | `ccd-rehome` | `move WINDOW --only ID --to-profile OTHER` |
+| to another terminal account (`CLAUDE_CONFIG_DIR` home) on the same machine | `ccd-rehome` | `profiles`, then `move cli --only ID --to-profile cli:work` |
 | from the terminal into Desktop | `ccd-rehome` | `cli-sessions`, then `register WINDOW --cli-session-id ID` |
 | from Desktop to the terminal | `ccd-rehome` | `resume-cli WINDOW --only ID` prints the command |
 | to another computer or OS | `st-bundle` | `export` there → copy one file → `import` here |
@@ -29,9 +31,12 @@ transporter's ssh-based procedure. MIT licensed.
 machine. `st-bundle` belongs to [session-transporter](skills/session-transporter/SKILL.md) and moves
 between machines.
 
-On one machine, every Desktop window and the terminal share the same conversation files (`~/.claude/projects/`).
-So the one-machine moves never copy a conversation: they only change which window and account *lists* it. Only a
-move to another machine copies the conversation. Even then it is copied byte for byte and never edited.
+A conversation is a file in a CLI home's `projects/` folder. Each `CLAUDE_CONFIG_DIR` home has its own `projects/`
+(`~/.claude/projects/` for the default home), and every Desktop window reads the default home unless it was started
+with `CLAUDE_CONFIG_DIR`. So the moves between accounts and between Desktop windows never copy a conversation: they
+only change which window and account *lists* it. A move to another terminal account is different: `move cli` moves
+the conversation byte for byte into the other home's `projects/` (with `--copy`, it copies it and keeps the
+original). A move to another machine copies it. A conversation is never edited.
 
 ## Status
 
@@ -43,6 +48,11 @@ move to another machine copies the conversation. Even then it is copied byte for
 Every combination that passed is recorded in [`skills/session-rehome/tested.json`](skills/session-rehome/tested.json)
 and [`skills/session-transporter/tested.json`](skills/session-transporter/tested.json). Reports from
 macOS and Windows are very welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Moves between terminal accounts (`move cli`, new in 0.11.0) are checked by the self-test on synthetic homes, and the
+real Claude Code CLI (2.1.319) found and loaded a transcript moved between two synthetic homes (one run so far, on
+2026-11-08; `tests/e2e_real_cli.py` repeats it). They have not yet run on a real signed-in CLI home: do the dry
+run first ([switch-accounts.md](docs/switch-accounts.md#terminal-cli-accounts)).
 
 ## Install
 
@@ -104,6 +114,19 @@ ccd-rehome verify work
 `status` names your windows (`default`, or a folder name such as `work`) and prints the exact fix command. The
 whole procedure, and how to move single sessions: [docs/switch-accounts.md](docs/switch-accounts.md).
 
+**Your windows and CLI homes can live in any folder.** The guides use `~/.claude-instances/work` only as an example.
+`ccd-rehome profiles` lists every one it finds and where it found it; register your own folders once:
+
+```bash
+ccd-rehome profiles --add-root ~/data/claude
+```
+
+(`--add PATH` registers a single window or CLI home, `--forget` undoes either; `CCD_REHOME_INSTANCES` works too.)
+The tool keeps its archives and account registry in its own state folder, `~/.local/state/session-rehome` on Linux
+(`~/Library/Application Support/session-rehome` on macOS, `%LOCALAPPDATA%\session-rehome` on Windows), or in
+`~/.claude-instances/_rehome` if an earlier version made it there. Details:
+[docs/multiple-instances.md](docs/multiple-instances.md#your-own-folders).
+
 **"Continue this session on my other computer."** On the computer that has the session:
 
 ```bash
@@ -150,8 +173,8 @@ What carries over in each direction: [docs/cli-and-desktop.md](docs/cli-and-desk
 ## What it never does
 
 - **Sign you in or out.** It never reads passwords, tokens or cookies; it only notes whether a login exists.
-- **Edit a conversation.** Transcripts are only ever copied, byte for byte, with a note appended at the end when a
-  session moves to another machine.
+- **Edit a conversation.** Transcripts are only ever moved or copied, byte for byte, with a note appended at the end
+  when a session moves to another machine.
 - **Lose the original.** Every change is archived first and can be undone exactly (`ccd-rehome rollback`). A
   bundle never changes the machine it came from, and a proof file shows that.
 - **Guess.** Before changing anything it checks every file against the formats it knows. A file it does not

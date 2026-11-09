@@ -43,7 +43,7 @@ The rules that matter most (each SKILL.md has the full list and the reasons):
 
 | Path | What it is |
 |---|---|
-| `skills/session-rehome/` | skill: `SKILL.md` (agent manual), `scripts/ccd-rehome` (the tool), `scripts/selftest.py`, `references/mechanics.md` (evidence), `tested.json` |
+| `skills/session-rehome/` | skill: `SKILL.md` (agent manual), `scripts/ccd-rehome` (the tool), `scripts/selftest.py`, `references/mechanics.md` (evidence), `references/cli-homes.md` (the CLI-home rules and messages in full), `references/cli-homes-review-log.md` (the 0.11.0 review history, historical), `tested.json` |
 | `skills/session-transporter/` | skill: `SKILL.md`, `scripts/st-bundle.py` and the `st-*` scripts, `scripts/selftest.py`, `references/` (evidence, formats, the gated procedure), `tested.json` |
 | `docs/` | the human guides |
 | `tests/` | repository tests: privacy, skill structure, every documented command against the tools' `--help`, links, manifests, versions, installer. `tests/run_all.py` runs them and both self-tests |
@@ -96,8 +96,23 @@ python3 tests/run_all.py --quick
 ```
 
 The first runs everything (under a minute); `--quick` runs only the repository tests (seconds). Set
-`SELFTEST_VERBOSE=1` to see the tool's output under a failing self-test check. CI runs the full set on Linux,
+`SELFTEST_VERBOSE=1` to see the tool's output under a failing self-test check. The ccd-rehome self-test hands the
+tool none of your shell's `CLAUDE_CONFIG_DIR` or `CCD_REHOME_*` settings, except `CCD_REHOME_PLATFORM=darwin` or
+`win32`, which runs every check with that OS's layout on any machine. CI runs the full set on Linux,
 macOS and Windows with Python 3.9 and 3.13, and validates the plugin with `claude plugin validate`.
+
+One test is manual, because it needs the real Claude Code CLI: `tests/e2e_real_cli.py` moves a synthetic session
+between two synthetic CLI homes with `ccd-rehome move`, checks that `claude -p --resume ID ping` finds it in the
+target home and not in the source home (the API is pointed at a closed port, so no account is used and no turn is
+spent), then rolls the move back and checks the reverse. Everything happens in a temporary folder. `run_all.py`
+does not run it, and it skips with a message unless `SESSION_REHOME_E2E=1` is set and `claude` is on `PATH`:
+
+```bash
+SESSION_REHOME_E2E=1 python3 tests/e2e_real_cli.py
+```
+
+It is the source of the measured claim in `skills/session-rehome/references/mechanics.md` §4b ("A CLI home is a
+Claude Code config dir"); record each run there with its date, CLI version and OS.
 
 ### Submitting
 

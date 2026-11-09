@@ -6,10 +6,24 @@ A Claude Code session has two parts.
 
 1. **The conversation**: one file, `~/.claude/projects/<folder key>/<session id>.jsonl`, plus a folder of the same
    name next to it for sub-agent conversations and saved tool output. The terminal `claude` command and every
-   Desktop window on the machine share these files.
+   Desktop window that use the same config dir (below) share these files; another config dir has its own.
 2. **For Desktop sessions, a small record** in the window's own folder (its user-data-dir):
    `claude-code-sessions/<account id>/<org id>/local_<id>.json`. It holds the title, the settings (model, effort,
    permissions) and which conversation file it belongs to.
+
+The config dir that holds those files is chosen with `CLAUDE_CONFIG_DIR` (the default is `~/.claude`). Each config
+dir, called a **CLI home**, has its own settings, history and login. Its account lives in `~/.claude.json` for the
+default home and `<home>/.claude.json` for any other; the login is `.credentials.json` on Linux and Windows, and the
+macOS Keychain on a Mac. The terminal CLI does **not** file sessions by account: it lists the current project
+folder's sessions whatever account is signed in, and transcripts carry no account ids. To use sessions with another
+account, move or copy them to the home where that account is signed in (what `ccd-rehome` advises is a copy).
+Desktop reads the default home unless it was started with `CLAUDE_CONFIG_DIR` set to another one. Nothing on disk
+says which, so `ccd-rehome` takes every Desktop window to read the default home, `~/.claude`. It never moves a
+conversation that a Desktop window lists out of `~/.claude` (unregister it first, or copy it; a record's earlier
+conversation only by a copy), always allows a move into `~/.claude` (which gives that window its conversation back;
+the tool advises a `--copy` there, so the other home, often a backup, keeps its own), and lets one between two other
+homes go ahead with a note. It knows `~/.claude` by the folder itself, not by its name, so a second name for it (a
+bind mount, `~/.Claude` on a case-insensitive disk) changes none of this.
 
 The **folder key** is the session's working folder with every character other than letters and digits turned into
 `-`: `/home/dana/Projects/my app` becomes `-home-dana-Projects-my-app`. Very long paths get a hash suffix. Claude
@@ -32,7 +46,8 @@ no account ids, so the folder alone decides which account owns a session. Along 
 
 It learns which e-mail belongs to which account id from Desktop's own storage and logs, and from the account
 entry of the terminal CLI's `~/.claude.json`, never from a password or token. It remembers every pairing it has
-seen in `~/.claude-instances/_rehome/accounts.json`.
+seen in `accounts.json` in its state folder (`~/.local/state/session-rehome` on Linux; `ccd-rehome profiles` prints
+where it is).
 
 ## Why terminal ↔ Desktop needs no copying
 

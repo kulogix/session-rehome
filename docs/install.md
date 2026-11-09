@@ -148,7 +148,7 @@ nothing is deleted.
 python3 ~/Projects/session-rehome/install.py --force --bin ~/.local/bin
 ```
 
-In every case nothing else changes: `ccd-rehome` keeps its state and archives in the same folder
+In every case nothing else changes: `ccd-rehome` keeps using the state folder an earlier version made
 (`~/.claude-instances/_rehome`), so `rollback` still undoes moves made with an earlier version, and projects
 moved with an earlier transporter keep working (their `CLAUDE.md` note is recognised, and upgraded the next time
 a session is moved into that project).
@@ -160,5 +160,5 @@ a session is moved into that project).
 | `~/.claude/skills/session-rehome/` | the one-machine skill and `ccd-rehome` (a link to the clone, or a copy) |
 | `~/.claude/skills/session-transporter/` | the between-machines skill, `st-bundle.py` and the `st-*` scripts |
 | `~/.local/bin/ccd-rehome`, `st-bundle`, `st-verify` | launchers (with `--bin`) |
-| `~/.claude-instances/_rehome/` | `ccd-rehome`'s account registry and the archive behind every change |
+| `~/.local/state/session-rehome/` (Linux; `$XDG_STATE_HOME/session-rehome` if set), `~/Library/Application Support/session-rehome/` (macOS), `%LOCALAPPDATA%\session-rehome\` (Windows) | `ccd-rehome`'s state folder: the account registry, the archive behind every change, and the profiles and roots registered with `profiles --add` / `--add-root`. If `~/.claude-instances/_rehome/` exists (an earlier version made it), it is used instead; `CCD_REHOME_STATE` overrides both. `ccd-rehome profiles` prints the one in use. The tool never creates `~/.claude-instances` |
 | `~/.local/share/st-bundles/` | unpacked bundles after `st-bundle import --apply` (safe to delete once verified) |
