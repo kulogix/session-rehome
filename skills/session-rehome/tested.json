@@ -262,6 +262,27 @@
         "status"
       ],
       "notes": "Raspberry Pi, community Desktop package; tests/run_all.py all passed"
+    },
+    {
+      "tool": "0.11.2",
+      "desktop": "5.11492.0",
+      "os_family": "macOS",
+      "os": "macOS 26.6.2",
+      "arch": "arm64",
+      "python": "3.9.6",
+      "date": "2026-11-12",
+      "profiles": 1,
+      "drift": {
+        "unknown_record_fields": 0,
+        "unknown_entries": 0
+      },
+      "verified": [
+        "doctor",
+        "dry-run",
+        "rehome",
+        "verify"
+      ],
+      "notes": "real Mac, first Desktop 5 run: 37 records written by 4.23118.1 and 5.11492.0 moved between accounts; Desktop's own log loaded all 37"
     }
   ]
 }
