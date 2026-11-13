@@ -108,8 +108,9 @@ an email, an account uuid, or a unique uuid prefix.
 Each Code session record lives at `<profile>/claude-code-sessions/<accountUuid>/<orgUuid>/local_<id>.json`.
 Desktop lists only the folder of the account and org that is signed in. After a sign-in change the old records
 are still there, just not listed, and the conversations are untouched in `~/.claude/projects/`. Moving the small
-record file into the signed-in account's folder brings the session back. Records contain no account ids, so the
-folder alone decides ownership.
+record file into the signed-in account's folder brings the session back. Desktop never compares a record with
+the signed-in account, so the folder alone decides where it shows. Since Desktop 5 a record can still hold the old
+account's email and its cloud, Remote Control and connector ids; a move drops them (mechanics.md §5a).
 
 ## Commands
 
@@ -152,15 +153,17 @@ R quit P | launch P | verify P | doctor | report [CHECK ...] | --version
 | Record `local_<id>.json` | moved. If the target already has that id, the newer `lastActivityAt` wins and both copies are kept |
 | Queued background work `armedWorkAtQuit` | kept in the record (it resumes at next launch) and reported |
 | Effort, UltraCode, permissions, title, cwd, prompt suggestion, artifacts | kept |
-| `remoteMcpServersConfig`, `withheldConnectorHosts`, `remoteControlAutoEligible`, `steeredByRemoteClient`, `bridgeSessionIds` | dropped (connector and Remote Control state of the old account) |
-| `error*`, `cliBinaryPin` | dropped (Desktop recreates them) |
+| `remoteMcpServersConfig`, `withheldConnectorHosts`, `remoteControlAutoEligible`, `steeredByRemoteClient`, `bridgeSessionIds`; Desktop 5: the old account's `emailAddress`, cloud, Remote Control, connector, artifact and Space ids, `sshReattach`, the quit-resume marks | dropped (state of the old account: `references/desktop5-fields.md`). A session started from Remote Control keeps its "never bypass permissions" clamp and its Remote Control restrictions (`remoteClientLimits`, `remoteControlDescendant`) |
+| `error*`, `cliBinaryPin`; Desktop 5: error-card detail, `peerInbound` | dropped (Desktop recreates them) |
 | Local-gateway-only model | replaced with `$CCD_REHOME_FALLBACK_MODEL` |
 | `backlog/tasks.json` task suggestions | merged by id. With `--only`, just those whose `originSessionId` moved |
 | `scheduled-tasks.json` | merged by id (full moves) |
 | `deleted_*` tombstones | copied, so deleted sessions stay deleted |
+| Desktop 5: `owed-bridge-delete_*` (Remote Control deletes the old account owes), `archived-sessions.idx` (a cache) | left in place. A move refuses (DRIFT) while a Remote Control delete is still in progress for a session |
+| Desktop 5: an imported session not resumed yet (its conversation is in `imported-staging/` in the account folder) | moves within its window (Desktop keeps reading it from there); `--to-profile`, `export-record` and `unregister` refuse it until it is resumed once. A fresh `local_<id>.json.tmp` of a session being moved is refused (DRIFT); other sessions' markers and files do not block a move |
 | Cowork `local-agent-mode-sessions/<acct>/<org>/local_*` | moved with `--include-cowork`; `rpm/` (plugin cache) left |
 | Conversations `~/.claude/projects/**.jsonl` | never touched |
-| `scratch-workspaces/<acct>/…` | left in place: the cwd locates the transcript. Reported |
+| `scratch-workspaces/<acct>/…` | left in place: the cwd locates the transcript. WARNING: when the old account signs in there again, Desktop may delete a scratch workspace none of its sessions uses after 7 idle days; copy out what you need |
 | Cookies, tokens, `spaces-present/*/link-key`, `config.json` | never touched |
 
 **Target org**, in order of preference:
@@ -307,6 +310,11 @@ session-transporter moves *conversations* between machines; this tool owns *Desk
 | `these conversations are open in another process` | the session is resumed in a terminal or another window | close it there first |
 | `MISMATCH  Desktop loaded …` (`verify`) | Desktop loaded fewer than exist | quit, relaunch, verify again; if it persists, check `sessions P` for unreadable records |
 | `Desktop has not logged loading … yet` (`verify`) | launched but the log line hasn't appeared yet | wait, open the Code tab, re-run |
+| `WARNING: N of these sessions' conversations … older than D days` (`status`; `doctor` WARN) | Claude Code would delete them at its next start: a terminal `claude` before 2.1.248 deletes every conversation older than `cleanupPeriodDays`, Desktop's included | tell the user; the fix is theirs: raise the setting named (e.g. `"cleanupPeriodDays": 3650` in that `settings.json`) or update Claude Code. Nothing is changed by the tool |
+| `a Remote Control delete of … is in progress (state intent)` (DRIFT) | Desktop has not finished deleting a session on claude.ai | launch the window signed in to that account and let it finish, then move |
+| `an imported session not resumed yet` (`--to-profile`, `export-record`, `unregister`) | its conversation is still staged inside the account folder, in no CLI home | the user resumes it once in Desktop (a move to the signed-in account of the same window works first), then re-run |
+| `refusing: N imported session(s) were resumed in Desktop since …` (`rollback`) | restoring would bring back an older copy of their conversation | move the sessions back with `move` instead |
+| `an unfinished write of a session record` (DRIFT) | a `local_*.json.tmp` Desktop would turn back into a record | launch and quit that window once; if it stays, check whether the `.json` is current before removing the `.tmp` (the user's call) |
 
 ## Platform support
 
@@ -402,6 +410,7 @@ A fork fixes one machine once and leaves every other copy broken. A workaround h
 - `references/mechanics.md`: storage layout, log lines, and the evidence for every rule.
 - `references/cli-homes.md`: CLI homes in full: every rule, refusal, warning and message of a CLI move.
 - `references/cli-homes-review-log.md`: how 0.11.0's CLI homes were reviewed, round by round (historical).
+- `references/desktop5-fields.md`: the 138 record fields Desktop 5 added, each with its class and the reason.
 - Human guides (install, several windows, switching accounts, troubleshooting): the project's `docs/` folder,
   https://github.com/kulogix/session-rehome/tree/main/docs.
 - **Environment:**

@@ -9,17 +9,17 @@ updated together with the code** (see SKILL.md "Maintaining this skill").
 
 | # | Fact the tool depends on | Used in | Re-check | `doctor` watches it? |
 |---|---|---|---|---|
-| C1 | Records live at `<profile>/claude-code-sessions/<acct>/<org>/local_<id>.json` and contain no account id | everything | `ls` a profile; `grep` a record for the account uuid | partly (unknown entries) |
+| C1 | Records live at `<profile>/claude-code-sessions/<acct>/<org>/local_<id>.json`, and Desktop decides where a session shows by that folder alone: it never compares a record's content with the signed-in account (Desktop 5 records can still hold the old account's email and server ids: §5) | everything | `ls` a profile; read §5a | partly (unknown entries) |
 | C2 | Desktop lists only `<signed-in acct>/<its org>` | `move` target | sign in, open the Code tab, look for `Loaded N persisted sessions from …` | yes (log line present) |
 | C3 | Log line `[LocalSessionManager] Initialization succeeded — accountId=…, orgId=…` | target org | `grep "Initialization succeeded" logs/main.log` | indirectly |
-| C4 | Log line `Loaded N persisted sessions from <path>` | target org, `verify` | `grep "persisted sessions" logs/main.log` | yes |
+| C4 | Log line `Loaded N persisted sessions from <path>`; Desktop 5 appends ` (K archived deferred, J of them unopened; hint H)` and logs the deferred ones apart: `Loaded K deferred archived sessions from <path> (<trigger>, <ms> ms)` (§2) | target org, `verify` | `grep "persisted sessions" logs/main.log` | yes |
 | C5 | Transitional pair at sign-in (old account + new org, then new + new, within seconds) | org filter | sign out and in, read the log | no: selftest "switching BACK" |
-| C6 | Login events: `Login-state transition (loggedOut: X → Y, …)` (newer builds) or `claude.ai account active and logged in` / `[account] User is logged out` (all builds; the only ones on 1.9255.2). The NEWEST one decides | signed-in verdict | sign out and in, read the log | no: selftest "older Desktop builds" |
+| C6 | Login events: `Login-state transition (loggedOut: X → Y, …)` (newer builds) or `claude.ai account active and logged in` / `[account] User is logged out` (all builds; the only ones on 1.9255.2); also `User logged out during IPC wait` (4.x), renamed `… during account ID wait` in 5.x. The NEWEST one decides | signed-in verdict | sign out and in, read the log | no: selftest "older Desktop builds", "Desktop 5" |
 | C7 | The claude.ai `sessionKey*` cookie in `Cookies` / `Network/Cookies` marks a live login | verdict, expiry | `sqlite3` on a copy: name and expiry columns only | no |
 | C8b | `config.json` `lastKnownAccountUuid` names the signed-in account. **Older builds (1.9255.2) never write it**; the account is then taken from the newest real init line (C3/C4) | account | read config.json | no: selftest |
 | C8 | IndexedDB holds `<uuid> … email_address … <email>` for the signed-in account | emails | `accounts` shows the email | no |
 | C9 | The record key list and its keep / drop classes (§5) | `move` rewrite | `doctor` | **yes** (unknown fields) |
-| C10 | Per-account side files: `deleted_*`, `backlog/tasks.json` (items with `id`, `originSessionId`), `scheduled-tasks.json` (`scheduledTasks` with `id`) | `move` | `doctor` | **yes** (unknown entries) |
+| C10 | Per-account side files: `deleted_*`, `backlog/tasks.json` (items with `id`, `originSessionId`), `scheduled-tasks.json` (`scheduledTasks` with `id`), `waiting-input/` (4.x); Desktop 5: `archived-sessions.idx(.tmp)`, `owed-bridge-delete_<sha256>`, `imported-staging/`, `local_*.json.tmp` (§1) | `move` | `doctor` | **yes** (unknown entries) |
 | C11 | `SingletonLock` → `<host>-<pid>` (Linux, macOS); `lockfile` held open (Windows) | running check | look while Desktop runs | no |
 | C12 | SIGTERM makes Desktop quit cleanly (`willQuit … quitting` in the log). **Not on 1.9255.2 Linux arm64: it ignores SIGTERM**; `quit` detects that after 30 s and says so | `quit` | `quit`, then read the log | no |
 | C14 | Linux launcher name: `claude-desktop`, or `claude-desktop-unofficial` (community Debian package from 4.x; the old name became an empty transitional package and `/usr/lib/claude-desktop/` was removed **under a running instance**, which then could not quit) | `launch`, `doctor` | `command -v` both | yes (Desktop app line) |
@@ -35,6 +35,9 @@ If a re-check fails, the tool is out of date. Fix it as described in SKILL.md an
 | `backlog/tasks.json` | not `{"items": [{"id": …}, …]}` | anything else inside `backlog/` |
 | `scheduled-tasks.json` | not `{"scheduledTasks": [...]}` | |
 | `deleted_*` | a folder | content not a ms timestamp |
+| `owed-bridge-delete_<sha256>` (Desktop 5) | | unreadable, or `state: "intent"`: a Remote Control delete still in progress names a session that would be stranded |
+| `local_<id>.json.tmp` (Desktop 5) | | always: Desktop restores a record from it when the `.json` is missing, so a moved session would come back |
+| a record with `importedFrom`, `stagedTranscriptPath` and no `resumeConfirmed` (Desktop 5) | | its conversation is in `imported-staging/` inside the account folder and would be left behind |
 | any other entry | | not matched by `KNOWN_ENTRIES` (it would be left behind) |
 
 `doctor` runs the same checks across all profiles without moving anything, and compares (tool, Desktop version,
@@ -49,10 +52,24 @@ OS family) against `tested.json`. The Desktop version comes from the profiles' o
 <profile>/IndexedDB/https_claude.ai_0.*      cached account object: <uuid> ... "email_address" ... <email>
 <profile>/logs/main.log, main1..N.log        rotated; the evidence for orgs and login state (macOS: see §8)
 <profile>/claude-code-sessions/<acct>/<org>/
-    local_<sessionId>.json                   one per Code session (small; no account ids inside)
+    local_<sessionId>.json                   one per Code session (small; see §5 for what it holds)
     deleted_<id>                             tombstones (content: a ms timestamp)
     backlog/tasks.json                       {"version", "items":[{id, originSessionId, ...}]}  task suggestions
     scheduled-tasks.json                     {"scheduledTasks":[...], ...}
+    waiting-input/                           (4.x) per-session queued input; a move refuses a non-empty one
+    archived-sessions.idx(.tmp)              (5.x) {v, archived:[local_…]}: ids Desktop loads in a second, deferred
+                                             pass. A cache Desktop deletes and rebuilds: never moved
+    owed-bridge-delete_<sha256>              (5.x) {version:3, remoteId, sessionId, transcriptIds, nonce,
+                                             state: intent|owed, action}: Remote Control deletes/archives this
+                                             account still owes claude.ai; processed only while it is signed in.
+                                             Never moved; a move refuses while one is in state "intent"
+    imported-staging/<cliSessionId>.jsonl    (5.x) the conversation of an imported session until its first resume
+                                             (then moved to the CLI home's projects/, and the record gets
+                                             resumeConfirmed). A move refuses such a record
+    local_<id>.json.tmp                      (5.x) an unfinished atomic write; promoted to the record at load when the
+                                             .json is missing or unreadable. A move refuses while one exists
+<profile>/scratch-workspaces/<acct>/<org>/scratch-YYYY-MM-DD-xxxxxx   (5.x) folders of folderless sessions; Desktop
+                                             deletes one no session of the signed-in account claims after 7 idle days
 <profile>/local-agent-mode-sessions/<acct>/<org>/   Cowork, same layout; rpm/ = per-org plugin cache
 <profile>-3p/                                Desktop's separate profile for a third-party inference gateway
 <CLI home>/projects/<mangled-cwd>/<cliSessionId>.jsonl   the conversation; never touched by a Desktop move
@@ -72,7 +89,18 @@ Loaded N persisted sessions from <profile>/claude-code-sessions/<B>/<OB>
 ```
 
 It reads only `<B>/<OB>`. Records anywhere else are invisible: no error and no recovery prompt. `verify` compares
-`Loaded N` with the records that existed at that time. Records created afterwards don't count, and Desktop
+`Loaded N` with the records that existed at that time.
+
+Desktop 5 [C: 5.11492.0, `index.chunk-Cga7L9c-.js` @2053065 and @2055112] loads archived sessions in a second pass.
+The first line then ends with a suffix, and the second pass has its own line:
+
+```
+Loaded N persisted sessions from <path> (K archived deferred, J of them unopened; hint on|off|absent|used|unreadable)
+Loaded K deferred archived sessions from <path> (after_active, <ms> ms)
+```
+
+The tool reads `<path>` without the suffix, and `verify` adds K to N. Before 0.11.2 the suffix was read as part of
+the path: `verify` then found no line for the folder, and the org could not be taken from that line. Records created afterwards don't count, and Desktop
 rewrites records while it runs, so modification times prove nothing. First measurement: 5 of 5 profiles matched
 exactly after their moves.
 
@@ -151,6 +179,83 @@ script, and `doctor` flags any key outside it.
 - **Sidebar custom groups** are per identity: `LocalSessions.setCustomGroups: … dropped (identity mismatch)`. They
   are not migrated.
 
+### 5a. Desktop 5 (5.11492.0, macOS, first seen 2026-11-12)
+
+A record written by Desktop 4.23118.1 on a real Mac had `subagentsTruncatedFor`, and every move there refused it
+(DRIFT). Desktop 5's record serializer [C: `index.chunk-BQ2IwaTf.js`, save @68235, load @79206] lists 214 keys;
+138 were unknown to the tool. Each was classified from Desktop's own code (its writers and readers, and what a
+load under another account, or without the field, does), then checked again by a second reader trying to refute
+it; 9 classes changed in that check. Every field, its class and the reason are in `desktop5-fields.md`; the lists
+are in the script, and the self-test moves a record holding all 138.
+- **Ownership** [C: `index.chunk-Cga7L9c-.js` @2043180 `getStorageDir`, @2050834 `homeTenancy`]: Desktop builds the
+  folder from the signed-in account and org and reads every `local_*.json` in it. No record field is compared with
+  the account, org or email. A record's account is set in memory from the folder it was loaded from. So the
+  folder still decides; but a record can carry the old account's email (`emailAddress`), an account uuid
+  (`remoteControlLiveAtUpdateQuit.accountId`) and its server-side ids. A move drops all of them.
+- **Account-bound, dropped (20 new, and `interruptedAwaitingPerson`):** the old account's email
+  (`emailAddress`; Cowork puts it in the model's environment and prompt); claude.ai cloud sessions
+  (`cloudSessionId`, `cloudSpawnedTasks`, `movedToCloud`: a kept marker would archive the session at load);
+  Remote Control (`remoteControlSpawn`, `remoteControlKeptServerCopyId`, `remoteControlLiveAtUpdateQuit`,
+  `remoteControlFollowsStarter`, `remoteControlUserEnabled`: kept, it would register the session with the new
+  account's claude.ai without asking); connectors and artifacts (`connectorWireNames`, `enabledMcpTools`,
+  `servedConnectorCalls`: Desktop's own guard compares with the folder's account, so a moved record would pass it;
+  `artifactsMcpVouchedCalls`); `backgroundTaskSuggestions`; the Cowork Space (`spaceId`); `sshReattach` (it would
+  re-adopt the old account's still-running remote CLI); and the quit-resume group Desktop clears as one
+  [C: `index.chunk-D0gqv3bV.js` @8216 `z()`]: `interruptedByQuitAt`, `interruptedByQuitFor`,
+  `interruptedUnseenResume`, `interruptedAwaitingPerson`. Kept, Desktop would continue an interrupted turn on its
+  own at the next launch under the new account. For the same reason `cutTurn` (an SSH turn cut short and owed a
+  continuation): Desktop's check that the person is the same compares two empty keys under a claude.ai sign-in.
+- **What `portable()` carries over** (a move, `export-record` and `adopt` all write through it; running it twice
+  changes nothing):
+  - a session started from a Remote Control client never runs in bypass permissions
+    (`remoteControlSpawn !== undefined || remoteClientLimits === true` [C: `index.chunk-CXKHmMGY.js` @1615]) and
+    stays under Desktop's Remote Control restrictions (`remoteControlSpawn !== undefined ||
+    remoteControlDescendant === true` [C: `index.chunk-Cga7L9c-.js` @59916]). `remoteControlSpawn` is dropped, so
+    both flags are set;
+  - with `remoteControlUserEnabled` gone, Desktop would read a held first start's
+    `pendingFirstStart.options.remoteControlAtStart` as a Remote Control request [C: `index.chunk-BQ2IwaTf.js`
+    @91394]: it is removed (Desktop removes it itself before that start);
+  - an SSH session whose first turn was cut has its conversation id only in `sshReattach.namedCliSessionId`, which
+    Desktop copies to `cliSessionId` at load [C: `index.chunk-Cga7L9c-.js` @395255]: it is copied before
+    `sshReattach` is dropped.
+- **Transient, dropped (6):** `coveredError`, `errorCategory`, `errorCode`, `restartErrorMark`, `tccFolderKind`
+  (error-card detail), and `peerInbound` (in-flight messages from sessions of the old folder).
+- **Host-bound (32; kept by same-host moves, dropped by `adopt --cwd`):** the SSH/WSL target and its process state
+  (`sshConfig`, `wslConfig`, `sshRemoteProcessId`, `sshRemoteTranscriptPath`, `sshHostChangedAt`, …), worktrees
+  (`worktreePath`, `worktreeName`, `worktreeLazy`, `folderWorktrees`, kept dirty trees), scratch workspaces
+  (`scratchCarried`, `scratchFilesLeftIn`), launchers (`launcherAtSpawn`, `knownStartedByHostLauncher`, …), folders
+  (`folderPlace`, `requestedAdditionalFolders`, `writtenRepositories`, `btwSharedTree`, `sharedTreeGone`),
+  `pendingSystemReminder`, `cuFlagsGrantedAt`, `tasksStoppedAt`/`tasksStoppedEnded`, and `stagedTranscriptPath`.
+- **Session state, kept (81):** lineage and conversation ids (`forkedFromSessionId`, `startChain`,
+  `priorRemoteCliSessionIds`, `overflowCliSessionIds`, …), side sessions and asides, PR and auto-fix bookkeeping
+  (`prs`, `autoFixDelivered`, `seenCommentIds`, `branch`, `sourceBranch`), titles and recaps, safety stops and
+  counters (`stoppedUntilPersonSends`, `connectionTriesSincePerson`, the side-session runaway guards), capability
+  flags, `remoteClientLimits`, `remoteControlDescendant` (it keeps Desktop's Remote Control restrictions), imports
+  (`importedFrom`, `resumeConfirmed`), and `subagentsTruncatedFor` (a cache hint: the conversation whose
+  `subagents/` folder was too big at the last full read; Desktop re-checks it).
+- **Per session, not per folder:** the refusals below concern the sessions a move takes, in the folders it takes
+  them from; another session's marker or `.tmp`, and anything in the target folder, do not block it.
+  - An imported session not resumed yet moves within its window: its record keeps the absolute
+    `stagedTranscriptPath`, and Desktop reads the staged conversation and renames it on the first resume from that
+    path, whatever folder it is in. `move --to-profile`, `export-record` and `unregister` refuse it (its
+    conversation is in no CLI home). `rollback` refuses an archive whose staged conversation Desktop has moved or
+    changed since (a resume): restoring it would bring back an older copy that the next resume writes over the
+    newer one. A staged conversation Desktop made after the archive is never removed by a rollback.
+  - A `local_<id>.json.tmp` is a hazard only when it is at most 30 days old: Desktop restores a record from an
+    older one no more [C: `index.chunk-BQ2IwaTf.js` @92054].
+  - A special file (FIFO, socket, device) in a folder a command archives is an ERROR before anything is written.
+- **Known limits, not handled:** a `--to-profile` move leaves a worktree session's lease in the source profile's
+  `git-worktrees.json`, and a `--only` move does not merge `scheduled-tasks.json`, so `scheduledTaskId` may then
+  name a task the target does not have (harmless: the session is no longer counted as that task's run).
+- **Scratch workspaces:** the folder stays under the old account, and Desktop's sweep for that account deletes a
+  scratch workspace none of its sessions claims after 7 idle days, once that account is signed in there again
+  [C: `index.chunk-Bkl22GgC.js` @40059 and @38860]. A move warns; copy out what you need.
+- **Desktop 5's own importer** (Settings › Import, and an automatic import at launch) cannot bring Code sessions
+  from another claude.ai account in the same profile: it works only in third-party (gateway) mode or behind an
+  admin setting, and it refuses the current profile folder [C: `index.chunk-C3kp6vup.js` @61553,
+  `index.chunk-DsTgL63G.js` @23201]. When it does run, it copies sessions with new ids, so it never collides with a
+  record this tool moved.
+
 ## 4a. CLI vs Desktop conversations
 
 - **Same files.** A conversation is `~/.claude/projects/<mangle(realpath(cwd))>/<cliSessionId>.jsonl`,
@@ -228,9 +333,29 @@ from the facts below and implemented to that spec; what was measured for it is s
   page says the cleanup pauses on a settings error with either setting explicitly set. That age means the file's
   mtime is [I] (the page says "older than"; not measured). The tool reads which rule applies from the transcript's
   most recent records: the `entrypoint` of the last record that has one, read from the tail (the last 256 KB after
-  the first 400 lines), never the whole file; `claude-desktop` is a Desktop turn [M, §4a]. A Cowork turn's
-  entrypoint is not known [I], so a Cowork transcript gets `cleanupPeriodDays`, the rule that warns; so does one whose
-  tail holds no entrypoint.
+  the first 400 lines), never the whole file; `claude-desktop` is a Desktop turn [M, §4a]. Claude Code also counts
+  `claude-desktop-3p` (Desktop on a third-party provider) and Cowork's `local-agent` / `local_agent` as desktop
+  surfaces [C: Claude Code 2.1.319's own entrypoint sets, read 2026-11-12], and so does the tool (0.11.2). One whose
+  tail holds no entrypoint gets `cleanupPeriodDays`, the rule that warns. A value that is not a whole number of days,
+  1 or more (`0`, a negative, `1e999`, text), is a settings error: Claude Code pauses its cleanup, and the tool then
+  counts nothing as deleted for its age.
+- **Not yet modelled** [C: Claude Code 2.1.319, its settings schema, read 2026-11-12]: Claude Code's own wording for
+  `desktopSessionCleanupPeriodDays` is "a retention ceiling … for session transcripts created or last written by a
+  desktop-host surface", `0` meaning no ceiling, and it does not combine with `cleanupPeriodDays` by taking the
+  shorter. The tool reads only the last entrypoint and takes the shortest, so it can warn where Claude Code keeps a
+  transcript (never the other way round); `status` and `doctor` therefore say "may delete" under this rule.
+- **Desktop conversations at risk (`doctor`, `status`, 0.11.2).** Each Desktop record's conversation is checked
+  against the rule the terminal `claude` on PATH applies [O, a real Mac, 2026-11-12: `claude --version` 2.1.119,
+  no `cleanupPeriodDays`, and two Desktop records whose conversations were gone, both last used more than 30 days
+  earlier; consistent with the rule above, not observed happening]. Before 2.1.248, or when it prints no version,
+  every conversation older than `cleanupPeriodDays` counts, Desktop's included. From 2.1.248, and with no `claude`
+  on PATH (only Desktop's own Claude Code), the rule above applies. `status` prints a WARNING line per CLI home,
+  `status --json` a `retention_risk` list (`n`, `of`, `days`, `setting`, `where`, `oldest`, `certain`, `why`, `fix`;
+  one per home, setting and place; empty on a CLI home's row), and `doctor` a WARN line. A record's earlier
+  conversations (`priorCliSessionIds`, `overflowCliSessionIds`) count, each conversation once. `claude --version`
+  runs only when the two rules disagree about a conversation. Before 2.1.248 the deletion is certain ("deletes");
+  under the newer rule the tool says "may delete" (see "Not yet modelled"). Nothing is changed: the fix (raise the
+  setting, or update Claude Code) is the user's.
 - **Managed settings** [D: https://code.claude.com/docs/en/managed-settings, "Deploy a managed settings file" and
   "How Claude Code combines managed sources", and https://code.claude.com/docs/en/settings, "Settings precedence",
   read 2026-11-09; not measured here]: managed settings rank above every settings file. The managed sources rank:

@@ -89,7 +89,7 @@ Project, docs and issues: https://github.com/kulogix/session-rehome
 import argparse, datetime, errno, glob, hashlib, json, os, platform, re, shutil, signal, sqlite3, stat, subprocess, \
     sys, tempfile, time
 
-VERSION = "0.11.1"
+VERSION = "0.11.2"
 PROJECT_URL = "https://github.com/kulogix/session-rehome"
 TESTED_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tested.json")
 
@@ -227,15 +227,38 @@ UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 ARCH_RE = re.compile(r"\d{8}T\d{6}Z-(move|rehome|adopt|unregister|pre-rollback|cli-move)")
 # Per-account state inside a record: claude.ai connectors and Remote Control. Meaningless (or wrong) elsewhere.
 ACCOUNT_BOUND = ("remoteMcpServersConfig", "withheldConnectorHosts", "remoteControlAutoEligible",
-                 "steeredByRemoteClient", "bridgeSessionIds")
+                 "steeredByRemoteClient", "bridgeSessionIds",
+                 # Desktop 5.11492.0 (classified from its code, mechanics.md §5): the old account's email, its claude.ai
+                 # cloud, Remote Control, connector and artifact ids and grants, its Cowork Space, the old account's
+                 # surviving remote CLI (sshReattach), and the quit-resume group Desktop clears as one (an automatic
+                 # continuation after a quit must not run under another account).
+                 "artifactsMcpVouchedCalls", "backgroundTaskSuggestions", "cloudSessionId", "cloudSpawnedTasks",
+                 "connectorWireNames", "emailAddress", "enabledMcpTools", "interruptedAwaitingPerson",
+                 "interruptedByQuitAt", "interruptedByQuitFor", "interruptedUnseenResume", "movedToCloud",
+                 "remoteControlFollowsStarter", "remoteControlKeptServerCopyId", "remoteControlLiveAtUpdateQuit",
+                 "remoteControlSpawn", "remoteControlUserEnabled", "servedConnectorCalls", "spaceId", "sshReattach",
+                 "cutTurn")          # an SSH turn cut short and owed a continuation: Desktop would continue it on its own
 # Fields that point at the ORIGIN MACHINE (its filesystem, displays, apps, browser tabs). Kept on a same-host move;
 # dropped when a record is adopted on another host / under another cwd (`adopt --cwd`), where they would name
 # things that do not exist. cwd/originCwd are rewritten instead.
 HOST_BOUND = ("gitAnchors", "gitAnchorsFolderRealpath", "gitAnchorsLookupOnly", "planPath", "shellFolders",
               "chromeTabGroupId", "cuSelectedDisplayId", "cuLastScreenshotDims", "cuAllowedApps",
-              "startedFromEnvironmentId")   # Desktop 4.23118.0: the SSH/WSL/... environment it started in (this host)
+              "startedFromEnvironmentId",   # Desktop 4.23118.0: the SSH/WSL/... environment it started in (this host)
+              # Desktop 5.11492.0: the SSH/WSL target and its process state, worktrees and kept trees, scratch
+              # workspaces, launchers, extra folders, and an imported session's staged conversation (a move refuses
+              # one not resumed yet: validate)
+              "btwSharedTree", "cuFlagsGrantedAt", "folderPlace", "folderWorktrees", "keepCoversOwnTree", "keptDirtyAt",
+              "keptDirtyWorktree", "keptWorktreeLeftover", "knownStartedByHostLauncher", "launcherAtSpawn",
+              "launcherUsedAppSignIn", "pendingSystemReminder", "requestedAdditionalFolders", "scratchCarried",
+              "scratchFilesLeftIn", "sharedTreeGone", "sshAddressNeverEdited", "sshConfig", "sshForeignDaemonLossAt",
+              "sshHostChangedAt", "sshKillRecoveryGrantedAt", "sshProcessLossStoodDownAt", "sshRemoteProcessId",
+              "sshRemoteTranscriptPath", "stagedTranscriptPath", "tasksStoppedAt", "tasksStoppedEnded", "worktreeLazy",
+              "worktreeName", "worktreePath", "writtenRepositories", "wslConfig",
+              "cuGrantFlags")      # cleared by Desktop together with cuAllowedApps and cuFlagsGrantedAt
 # Transient state Desktop recreates if still true.
-TRANSIENT = ("cliBinaryPin", "error", "errorAt", "errorRows", "priorErrorMark")
+TRANSIENT = ("cliBinaryPin", "error", "errorAt", "errorRows", "priorErrorMark",
+             # Desktop 5.11492.0: error-card detail and in-flight peer messages between sessions of the old folder
+             "coveredError", "errorCategory", "errorCode", "peerInbound", "restartErrorMark", "tccFolderKind")
 # Models that only exist on a local/3p gateway; an Anthropic account cannot start them.
 LOCAL_MODEL_RE = re.compile(os.environ.get("CCD_REHOME_LOCAL_MODEL_RE", r"^claude-local-.*$"))
 FALLBACK_MODEL = os.environ.get("CCD_REHOME_FALLBACK_MODEL", "claude-opus-5-5")
@@ -258,15 +281,94 @@ KNOWN_KEYS = set(ACCOUNT_BOUND) | set(TRANSIENT) | set(HOST_BOUND) | {
     "titleTurn", "toolSurfaceSnapshot", "transcriptModelStates", "transcriptUnavailable", "writtenBranches",
     # Desktop 4.x (first seen 4.23118.0, macOS): computer-use / Chrome grants for the session, turn bookkeeping,
     # history and links. Session state, kept.
-    "chromeAllowedDomains", "chromeTabGroupId", "contextExceededCount", "cuAllowedApps", "cuGrantFlags",
-    "cuLastScreenshotDims", "cuSelectedDisplayId", "interruptedAwaitingPerson", "lastAssistantCliSessionId",
+    "chromeAllowedDomains", "chromeTabGroupId", "contextExceededCount", "cuAllowedApps",
+    "cuLastScreenshotDims", "cuSelectedDisplayId", "lastAssistantCliSessionId",
     "lastTurnEdgeAt", "planPath", "previousTitles", "queryCrashes", "shellFolders", "spawnedFrom", "turnBoxDeclared",
-    "turnBoxMounted", "turnWrapUp"}
+    "turnBoxMounted", "turnWrapUp",
+    # Desktop 5.11492.0 (first seen on macOS, 2026-11-12): session state, kept. Lineage and conversation ids, side
+    # sessions, PR and auto-fix bookkeeping, titles, recaps, safety stops and counters, capability flags, imports.
+    "_startedThroughHostCliLauncher", "adoptedFromOtherSurface", "agent", "asides", "autoArchiveExempt",
+    "autoArchiveOnPrClose", "autoFixDelivered", "autoFixNoticeSent", "autoSendsPausedAfterDelete", "branch",
+    "btwLoweredFrom", "bypassChosenInApp", "cliMcpAppServerNames", "color", "connectionTriesSincePerson",
+    "contextRecovery", "conversationPluginLoaded", "cutTurnChain", "cutTurnStoppedAt",
+    "dispatchParentId", "dispatchParentOrigin", "durableCronMade", "effortInherited", "endedIdleAsOf",
+    "forkedAtMessageUuid", "forkedFromSessionId", "fromCliTranscript", "givenUpCliSessionIds",
+    "historyOnlyCliSessionId", "importedFrom", "importedRunOf", "indexedAt", "isStarred", "lanyardOfferPrompt",
+    "lastTurnReport", "lastTurnStopped", "launcherMarked", "lineageDetached", "lineageDetachedBy",
+    "midTaskReplyTool", "overflowCliSessionIds", "overflowRemoteCliSessionIds", "peerMessaged", "peerReceipts",
+    "pendingFirstStart", "permissionModePicked", "priorCliSessionLeftAt", "priorRemoteCliSessionIds", "prs",
+    "queuedSideSessionNotes", "recap", "recapAt", "remoteClientLimits", "remoteControlDescendant",
+    "resumeConfirmed", "scheduledRunContinued", "scheduledTaskId", "seenCommentIds", "setupTools",
+    "sideSessionNotes", "sideSessionOffersMuted", "sideSessionReportOwed", "sideSessionStartsSinceUserMessage",
+    "sideSessionWakesSinceUserMessage", "simulatorToolsUsed", "sourceBranch", "spawnedFromEndNotified",
+    "startChain", "stoppedUntilPersonSends", "subagentsTruncatedFor", "surfaceNoticeUuid", "titleCheck",
+    "titleFromPr", "titleOffers", "titleSuggestionsOff", "transcriptCuts", "violinBow", "violinBowHomeSettings",
+    "violinBowPromptKinds", "violinBowPrompts"}
+
+
+def portable(rec):
+    """A record without its ACCOUNT_BOUND and TRANSIENT fields: what a move, an export or an adopt writes (running it
+    twice changes nothing). Desktop 5 derives three things from fields dropped here, so they are carried over
+    (mechanics.md §5a):
+    - a session started from a Remote Control client never runs in bypass permissions (remoteControlSpawn OR
+      remoteClientLimits) and keeps Desktop's Remote Control restrictions (remoteControlSpawn OR
+      remoteControlDescendant): both flags are set when remoteControlSpawn is dropped;
+    - with remoteControlUserEnabled gone, a held first start's options.remoteControlAtStart would become a Remote
+      Control request under the new account: it is removed (Desktop removes it itself before the start);
+    - an SSH session whose first turn was cut has its conversation id only in sshReattach.namedCliSessionId, which
+      Desktop copies to cliSessionId at load: it is copied here, before sshReattach is dropped."""
+    out = {k: v for k, v in rec.items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+    if rec.get("remoteControlSpawn") is not None:
+        out["remoteClientLimits"] = True
+        out["remoteControlDescendant"] = True
+    pfs = out.get("pendingFirstStart")
+    if isinstance(pfs, dict) and isinstance(pfs.get("options"), dict) and "remoteControlAtStart" in pfs["options"]:
+        out["pendingFirstStart"] = dict(pfs, options={k: v for k, v in pfs["options"].items()
+                                                      if k != "remoteControlAtStart"})
+    ra = rec.get("sshReattach")
+    if not rec.get("cliSessionId") and isinstance(ra, dict) and isinstance(ra.get("namedCliSessionId"), str) \
+            and ra["namedCliSessionId"]:
+        out["cliSessionId"] = ra["namedCliSessionId"]
+    return out
+
+
+def imported_unresumed(rec):
+    """Desktop 5: an imported session not resumed yet keeps its conversation in <its account folder>/imported-staging/
+    (stagedTranscriptPath), in no CLI home, until its first resume moves it there and sets resumeConfirmed."""
+    return isinstance(rec, dict) and bool(rec.get("importedFrom")) and not rec.get("resumeConfirmed") \
+        and isinstance(rec.get("stagedTranscriptPath"), str) and bool(rec["stagedTranscriptPath"])
+
+
+def _special_files(path):
+    """FIFOs, sockets and devices at or below `path` (links are not followed): an archive cannot copy them."""
+    out = []
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return out
+    if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+        return [path]
+    if stat.S_ISDIR(st.st_mode):
+        for dp, dn, fn in os.walk(path):
+            for x in dn + fn:
+                try:
+                    m = os.lstat(os.path.join(dp, x)).st_mode
+                except OSError:
+                    continue
+                if not (stat.S_ISREG(m) or stat.S_ISDIR(m) or stat.S_ISLNK(m)):
+                    out.append(os.path.join(dp, x))
+    return out
 # Entries that may appear inside an <account>/<org> session dir, per store.
-#   code:   records, tombstones, task suggestions, scheduled tasks, waiting-input (pending input snapshots, 4.x)
+#   code:   records, tombstones, task suggestions, scheduled tasks, waiting-input (pending input snapshots, 4.x);
+#           Desktop 5: archived-sessions.idx(.tmp) (a cache of archived ids, rebuilt by Desktop), owed-bridge-delete_<sha256>
+#           (the account's Remote Control delete retries: never moved), imported-staging/ (conversations of imported
+#           sessions not resumed yet: validate refuses such a record), local_*.json.tmp (an unfinished write: validate
+#           refuses, since Desktop restores a record from it when the .json is gone)
 #   cowork: sessions (local_*), plus in 4.x a per-account workspace: caches/config Desktop recreates (left in place)
 #           and USER DATA whose link to sessions is not yet understood (spaces, agents) -> a Cowork move refuses.
-KNOWN_ENTRIES = re.compile(r"^(local_.+\.json|deleted_.+|backlog|scheduled-tasks\.json|waiting-input|.*\.rehome-tmp-\d+)$")
+KNOWN_ENTRIES = re.compile(r"^(local_.+\.json|deleted_.+|backlog|scheduled-tasks\.json|waiting-input|.*\.rehome-tmp-\d+|"
+                           r"archived-sessions\.idx(\.tmp)?|owed-bridge-delete_[0-9a-f]{64}|imported-staging|"
+                           r"local_.+\.json\.tmp)$")
 COWORK_CACHE = {"rpm", "cowork_plugins", "cowork-gb-cache.json", ".claude.json", ".claude.json.lock", "backups", "debug",
                 "scheduled-tasks.json"}
 COWORK_USERDATA = {"spaces.json", "agent", "cowork_settings.json"}
@@ -293,6 +395,7 @@ def has_content(path):
     except (OSError, ValueError):
         return os.path.getsize(path) > 0
 _LOG_CACHE = {}
+_SHARED_LOG = {}
 DRY = False
 
 
@@ -799,31 +902,47 @@ class Profile:
         inits = sorted(set(inits))
         out = []
         for i, (t, a, o) in enumerate(inits):
-            nxt = next(((t2, a2, o2) for t2, a2, o2 in inits[i + 1:] if (t2, a2, o2) != (t, a, o)), None)
+            # the next DIFFERENT (account, org): the same pair a second later (its Loaded line) is not it
+            nxt = next(((t2, a2, o2) for t2, a2, o2 in inits[i + 1:] if (a2, o2) != (a, o)), None)
             if nxt and nxt[1] != a and nxt[2] == o and (nxt[0] - t).total_seconds() <= 10:
                 continue
             out.append((t, a, o))
         return out
 
     def loaded_lines(self):
-        return self.log_lines(r".*Loaded (\d+) persisted sessions from (.+?)\s*$")
+        """`Loaded N persisted sessions from <dir>`; Desktop 5 appends ` (K archived deferred, J of them unopened;
+        hint H)` when it defers archived sessions, and logs those apart (deferred_lines)."""
+        return self.log_lines(r".*Loaded (\d+) persisted sessions from (.+?)"
+                              r"(?: \((\d+) archived deferred, \d+ of them unopened; hint \w+\))?\s*$")
 
-    def login_transitions(self):
-        if self.log_dir()[1] and self.path != os.path.realpath(DEFAULT_PROFILE):
-            return []                                        # shared macOS log: cannot tell whose transition it was
-        return [(t, m.group(2) == "true", m.group(4)) for t, m in self.log_lines(
-            r".*Login-state transition \(loggedOut: \w+ \S+ (\w+), uuid: (\S+) \S+ ([^)]+)\)")]
+    def deferred_lines(self):
+        """Desktop 5: `Loaded K deferred archived sessions from <dir> (<trigger>, <ms> ms)`, right after the main load."""
+        return self.log_lines(r".*Loaded (\d+) deferred archived sessions from (.+?) \([^()]*\)\s*$")
+
+    def log_ambiguous(self):
+        """True when a log line without a path may be another window's: macOS keeps one log for every instance that
+        has no logs/ folder of its own, so with a second such instance (or for any but the default profile) a
+        sign-in line cannot be attributed. Path-bearing lines (Loaded … from <path>) still can."""
+        if not self.log_dir()[1]:
+            return False
+        if self.path != os.path.realpath(DEFAULT_PROFILE):
+            return True
+        if "shared" not in _SHARED_LOG:
+            _SHARED_LOG["shared"] = [x for x in discover() if not _glob(os.path.join(x, "logs"), "main*.log")]
+        return len(_SHARED_LOG["shared"]) > 1
 
     def login_events(self):
-        """(time, logged_in) for every sign-in/out signal, oldest first. Newer builds log `Login-state transition`;
-        older ones (seen: 1.9255.2 Linux arm64) only `claude.ai account active and logged in` / `User is logged out`
-        / `synthesizing logged-out`. Only the NEWEST event counts."""
-        ev = [(t, not out) for t, out, _ in self.login_transitions()]
-        ev += [(t, True) for t, _ in self.log_lines(r".*claude\.ai account active and logged in")]
-        ev += [(t, False) for t, _ in self.log_lines(
-            r".*(\[account\] User is logged out|User logged out during IPC wait|synthesizing logged-out)")]
-        ev.sort(key=lambda x: x[0])                 # stable: same-second events keep their log order
-        return ev
+        """(time, logged_in) for every sign-in/out signal, in the log's order (one pattern, so lines of the same
+        second keep their order). Newer builds log `Login-state transition`; older ones (seen: 1.9255.2 Linux arm64)
+        only `claude.ai account active and logged in` / `User is logged out` / `synthesizing logged-out`; 4.x
+        `User logged out during IPC wait`, named `… during account ID wait` in 5.x. Only the NEWEST event counts.
+        None of these lines names a profile: on a log several windows share, there are none (log_ambiguous)."""
+        if self.log_ambiguous():
+            return []
+        return [(t, (m.group("lo") == "false") if m.group("lo") else bool(m.group("li"))) for t, m in self.log_lines(
+            r".*(?:Login-state transition \(loggedOut: \w+ \S+ (?P<lo>\w+), uuid: |"
+            r"(?P<li>claude\.ai account active and logged in)|"
+            r"\[account\] User is logged out|User logged out during (?:IPC|account ID) wait|synthesizing logged-out)")]
 
     def state(self):
         cfg = self.config()
@@ -1238,24 +1357,33 @@ def transcript_scan(path):
 
 
 def cleanup_days(path):
+    """cleanupPeriodDays from the CLI home's settings.json: 30 when it sets none (or the file cannot be read), None
+    when it sets a value that is not a whole number of days, 1 or more (0, -1, 1e999, "x"): Claude Code then reports
+    a settings error and pauses its cleanup (mechanics.md §4b), so nothing is deleted for its age."""
     try:
-        return int(load(os.path.join(path, "settings.json")).get("cleanupPeriodDays", 30))
-    except (OSError, ValueError, TypeError, AttributeError):
+        d = load(os.path.join(path, "settings.json"))
+    except (OSError, ValueError):
         return 30
+    if not isinstance(d, dict) or "cleanupPeriodDays" not in d:
+        return 30
+    return _whole_days(d["cleanupPeriodDays"])
 
 
 DESKTOP_ENTRYPOINT = "claude-desktop"       # the entrypoint of a turn in Claude Desktop (mechanics.md §4a)
+# Every entrypoint Claude Code counts as a desktop-host surface (Claude Desktop, its third-party mode, Cowork), whose
+# transcripts it keeps at any age from 2.1.248 [C: Claude Code 2.1.319's own sets of entrypoints]
+DESKTOP_ENTRYPOINTS = frozenset((DESKTOP_ENTRYPOINT, "claude-desktop-3p", "local-agent", "local_agent"))
 DESKTOP_RULE_VERSION = "2.1.248"            # the first Claude Code that keeps a Desktop transcript at any age (§4b)
 
 
 def _whole_days(v):
     """A settings value as a whole number of days (1 or more), or None when it is not one: Claude Code pauses its
     cleanup on such a settings error (mechanics.md §4b, "Retention")."""
-    if v is None or isinstance(v, bool):
+    if v is None or isinstance(v, bool) or (isinstance(v, float) and not v.is_integer()):
         return None
     try:
         v = int(v)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
     return v if v >= 1 else None
 
@@ -1343,12 +1471,15 @@ def retention(path):
     name = cli_home_name(path)
     mc = managed_values(path, "cleanupPeriodDays")
     hd = desktop_cleanup_days(path)
-    cdays, cwhere = _shortest(mc + [(cleanup_days(path), name)])
+    own = cleanup_days(path)
+    cdays, cwhere = _shortest(mc + ([(own, name)] if own is not None else []))
     ddays, dwhere = _shortest(managed_values(path, "desktopSessionCleanupPeriodDays") + ([(hd, name)] if hd else []))
     mcd, mcw = _shortest(mc)
 
     def rule(entrypoint):
-        if entrypoint != DESKTOP_ENTRYPOINT:
+        if cdays is None and not mcd:
+            return None, None, None           # a settings error pauses Claude Code's cleanup altogether
+        if entrypoint not in DESKTOP_ENTRYPOINTS:
             return cdays, "cleanupPeriodDays", cwhere
         rules = ([(mcd, "cleanupPeriodDays", mcw)] if mcd else []) + \
                 ([(ddays, "desktopSessionCleanupPeriodDays", dwhere)] if ddays else [])
@@ -1368,14 +1499,114 @@ def claude_version():
         if exe:
             try:
                 m = re.search(r"\d+\.\d+\.\d+", subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                                               encoding="utf-8", errors="replace",
                                                                timeout=20).stdout or "")
                 have = m.group(0) if m else None
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, ValueError, subprocess.SubprocessError):
                 have = None
         if not have:
             why = "`claude --version` printed no version" if exe else "no `claude` on PATH"
         _CLAUDE_VERSION.append((exe, have, why))
     return _CLAUDE_VERSION[0]
+
+
+_CLI_INDEX = {}
+
+
+def cli_index(homes):
+    """{conversation id: (path, home)} of every transcript in these CLI homes, the default home first (as
+    find_cli_transcript), built once per run: one walk per home instead of a glob per conversation."""
+    key = tuple(h.path for h in homes)
+    if key not in _CLI_INDEX:
+        default_path = os.path.realpath(CLI_DEFAULT)
+        idx = {}
+        for h in [x for x in homes if x.path == default_path] + [x for x in homes if x.path != default_path]:
+            for t in _cli_transcripts(h.path):
+                idx.setdefault(os.path.basename(t)[:-6], (t, h))
+        _CLI_INDEX[key] = idx
+    return _CLI_INDEX[key]
+
+
+def record_conversations(rec):
+    """The conversation ids a Desktop record holds: its current one, then its earlier ones (priorCliSessionIds and
+    Desktop 5's overflowCliSessionIds), which Desktop still shows as the session's history."""
+    if not isinstance(rec, dict):
+        return []
+    ids = [rec.get("cliSessionId")]
+    for k in ("priorCliSessionIds", "overflowCliSessionIds"):
+        if isinstance(rec.get(k), list):
+            ids += rec[k]
+    out = []
+    for x in ids:
+        if isinstance(x, str) and x and x not in out:
+            out.append(x)
+    return out
+
+
+def retention_risk(p, homes, reg=None):
+    """The conversations of Desktop profile p's records (current and earlier ones, each once) that Claude Code would
+    delete for their age at its next start (mechanics.md §4b): one row per (CLI home, setting, where it is set),
+    {home, n (at risk), of (the profile's conversations in that home), days, setting, where, oldest (days), certain,
+    why, fix}. The age is the transcript's mtime, which is what Claude Code compares.
+    Which Claude Code decides the rule: a terminal `claude` before 2.1.248, or one that prints no version, deletes
+    EVERY transcript older than cleanupPeriodDays, Desktop's included (seen on a real Mac: 2.1.119, and two records
+    whose conversations were gone): `certain`. 2.1.248 and later, and Desktop's own Claude Code when there is no
+    `claude` on PATH, follow retention() (a conversation of a desktop surface kept at any age unless
+    desktopSessionCleanupPeriodDays or a managed cleanupPeriodDays limits it), which models Claude Code from its
+    documentation: "may delete". `claude --version` runs only when the two rules disagree about a conversation."""
+    idx, now, rules, seen, items, of = cli_index(homes), time.time(), {}, set(), [], {}
+    for _, _, _, _, rec in inventory(p, reg or {}):
+        for cli in record_conversations(rec):
+            t, h = idx.get(cli, (None, None))
+            if not t or os.path.realpath(t) in seen:
+                continue
+            seen.add(os.path.realpath(t))
+            try:
+                age = (now - os.path.getmtime(t)) / 86400.0
+            except OSError:
+                continue
+            of[h.path] = of.get(h.path, 0) + 1
+            if h.path not in rules:
+                rules[h.path] = retention(h.path)
+            ret = rules[h.path]
+            old_rule = (ret["cleanup"][0], "cleanupPeriodDays", ret["cleanup"][1])
+            limits = [x for x in (ret["cleanup"][0], ret["desktop"][0],
+                                  (ret["managed_cleanup"] or (None,))[0]) if x is not None]
+            if not limits or age <= min(limits):
+                continue                          # young enough for every rule: the transcript is not even read
+            new_rule = ret["rule"](transcript_scan(t)["entrypoint"])
+            items.append((h, age, old_rule, new_rule))
+
+    def risky(rule, age):
+        return rule[0] is not None and age > rule[0]
+    ver, old = None, False
+    if any(risky(o, a) != risky(n, a) for _, a, o, n in items):
+        exe, ver, _ = claude_version()
+        old = bool(exe) and not (ver and _vkey(ver) >= _vkey(DESKTOP_RULE_VERSION))
+    rows = {}
+    for h, age, o, n in items:
+        rule = o if old else n
+        if not risky(rule, age):
+            continue
+        row = rows.setdefault((h.path, rule[1], rule[2]), {
+            "home": h.name, "n": 0, "of": of[h.path], "days": rule[0], "setting": rule[1], "where": rule[2],
+            "oldest": 0, "certain": old})
+        row["n"] += 1
+        row["oldest"] = max(row["oldest"], int(age))
+    out = []
+    for (path, _, _), row in rows.items():
+        own = row["where"] == row["home"]           # set (or defaulted) in the home's settings.json, not managed
+        place = os.path.join(short(path), "settings.json") if own else row["where"]
+        row["why"] = ((f"the terminal Claude Code here is {ver}, older than {DESKTOP_RULE_VERSION}" if ver else
+                       f"the terminal Claude Code here prints no version, so it is taken to be older than "
+                       f"{DESKTOP_RULE_VERSION}") + ": at its next start it deletes every conversation older than "
+                      f"cleanupPeriodDays, Desktop's included" if old else
+                      f"{row['setting']} ({row['days']} days, {place}) applies to them")
+        row["fix"] = ((f"set {row['setting']} to a larger number (e.g. 3650) in {place}" if own else
+                       f"{place} sets {row['setting']}: whoever manages it can raise it") +
+                      ("; or update the terminal Claude Code (`claude update`)" if old and own else ""))
+        out.append(row)
+    return out
 
 
 def login_file(path):
@@ -1723,14 +1954,27 @@ def resolve_account(reg, p, spec):
 
 
 # ---------------- validation ----------------
-def validate(dirs):
+TMP_PROMOTE_DAYS = 30        # Desktop 5 restores a record from local_X.json.tmp only when it is at most this old
+
+
+def validate(dirs, picked=None, target=None, staged_ok=False):
     """Check every structure a move would read or write against the documented formats (mechanics.md §0, §1, §5).
     Returns (errors, drift):
       errors = the format is broken or changed in a way the tool cannot handle  -> always refuse
       drift  = something new or unexpected the tool would carry blindly or leave behind -> refuse a real run unless
-               --accept-drift; a dry run shows it either way."""
-    errors, drift = [], []
+               --accept-drift; a dry run shows it either way.
+    Desktop 5's known hazards (mechanics.md §0) are drift too, listed again in validate.hazards. They concern the
+    sessions a move takes: `picked` (the record paths it moves; None = every record) in the source folders, never
+    in `target`. `staged_ok`: a move within this profile keeps an imported session's path to its staged conversation
+    working, so that one is not a hazard there."""
+    errors, drift, hazards = [], [], []
     cowork_userdata = []
+
+    def mine(d, name):
+        return d != target and (picked is None or os.path.join(d, name) in picked)
+
+    def hazard(x):
+        drift.append(x); hazards.append(x)
     def typ(rec, k, t, where):
         if k in rec and rec[k] is not None and not isinstance(rec[k], t):
             errors.append(f"{where}: field {k!r} is {type(rec[k]).__name__}, expected {t if isinstance(t, type) else t}")
@@ -1741,12 +1985,46 @@ def validate(dirs):
         for e in sorted(os.listdir(d)):
             f = os.path.join(d, e)
             cls = entry_class(store, e)
+            special = _special_files(f)
+            if special:
+                errors.append(f"{short(special[0])}: a special file (FIFO, socket or device): it cannot be archived"
+                              + (f" ({len(special)} in all)" if len(special) > 1 else ""))
+                continue
             if cls == "unknown":
                 drift.append(f"{short(f)}: unknown entry {'(folder)' if os.path.isdir(f) else '(file)'}: it would be "
                              f"LEFT BEHIND by a move")
             elif cls == "userdata":
                 if has_content(f):
                     cowork_userdata.append(f)
+            elif store == "code" and e in ("imported-staging",) and not os.path.isdir(f):
+                errors.append(f"{short(f)}: expected a folder (Desktop 5's imported-staging/)")
+            elif store == "code" and (e.startswith("archived-sessions.idx") or e.startswith("owed-bridge-delete_") or
+                                      e.endswith(".json.tmp")) and not os.path.isfile(f):
+                errors.append(f"{short(f)}: expected a file")
+            elif store == "code" and e.startswith("local_") and e.endswith(".json.tmp"):
+                try:
+                    fresh = time.time() - os.path.getmtime(f) <= TMP_PROMOTE_DAYS * 86400
+                except OSError:
+                    fresh = True
+                if fresh and mine(d, e[:-4]):
+                    hazard(f"{short(f)}: an unfinished write of a session record. Desktop 5 restores the record from "
+                           f"it when {e[:-4]} is missing, so the moved session would come back here. Start and quit "
+                           f"this window once (signed in to this account); if the .tmp stays, check that {e[:-4]} is "
+                           f"current before removing it")
+            elif store == "code" and e.startswith("owed-bridge-delete_"):
+                try:
+                    mk = load(f) if os.path.getsize(f) < 65536 else None
+                except (OSError, ValueError):
+                    mk = None
+                if d == target:
+                    pass                          # the target account's own pending deletes: nothing moves them
+                elif not isinstance(mk, dict):
+                    hazard(f"{short(f)}: a Remote Control delete marker this tool cannot read (which session it "
+                           f"names is not known)")
+                elif mk.get("state") == "intent" and mine(d, f"{mk.get('sessionId')}.json"):
+                    hazard(f"{short(f)}: a Remote Control delete of {mk.get('sessionId')} is in progress "
+                           f"(state intent): moving that session would strand it. Launch Desktop signed in to "
+                           f"this account so it finishes, then move")
             elif e == "waiting-input" and store == "code":
                 if os.path.isdir(f) and os.listdir(f):
                     drift.append(f"{short(f)}: holds {len(os.listdir(f))} pending input snapshot(s); their format is not "
@@ -1764,6 +2042,8 @@ def validate(dirs):
                              ("lastActivityAt", (int, float)), ("createdAt", (int, float)),
                              ("sessionSettings", dict), ("priorCliSessionIds", list), ("armedWorkAtQuit", dict)):
                     typ(rec, k, t, short(f))
+                if imported_unresumed(rec) and not staged_ok and mine(d, e):
+                    hazard(imported_note(f, rec))
                 new = sorted(k for k in rec if k not in KNOWN_KEYS)
                 if new:
                     drift.append(f"{short(f)}: unknown record field(s) {', '.join(new)}: they would be COPIED as-is "
@@ -1794,7 +2074,26 @@ def validate(dirs):
                 except (OSError, ValueError) as x:
                     errors.append(f"{short(f)}: not readable JSON ({x})")
     validate.cowork_userdata = cowork_userdata
+    validate.hazards = hazards
     return errors, drift
+
+
+def refuse_drift(drift, hazards):
+    """The refusal for DRIFT: a known Desktop 5 hazard of a session being moved says so (do what its line says);
+    anything else is something Desktop stores that the tool does not know yet."""
+    if all(x in hazards for x in drift):
+        die("refusing: a session this would take is not safe to move yet (DRIFT above); nothing was changed.\n"
+            "  Do what the DRIFT line says, then re-run (--accept-drift overrides; a dry run shows the plan).")
+    die("refusing: Desktop stores something this tool does not know yet (DRIFT above); nothing was changed.\n"
+        "  Review it with --dry-run. If you are sure it is safe, re-run with --accept-drift. Either way, please "
+        "teach the tool about it (SKILL.md \"Maintaining this skill\") so the next run is clean.")
+
+
+def imported_note(f, rec):
+    return (f"{short(f)}: an imported session not resumed yet: its conversation is only in "
+            f"{short(os.path.dirname(rec['stagedTranscriptPath']))} (Desktop's imported-staging/), in no CLI home, so "
+            f"this would leave it behind. Resume it once in Desktop (Desktop then moves the conversation to the CLI "
+            f"home; a move to the signed-in account of this same window keeps it working), then re-run")
 
 
 def desktop_version(paths):
@@ -1932,6 +2231,10 @@ def archive(p, kind, dirs, plan):
     while os.path.exists(root):
         time.sleep(1); ts, root = mk()
     name = os.path.basename(root)
+    bad = [x for d in dirs if os.path.isdir(d) for x in _special_files(d)]
+    if bad:
+        die(f"refusing: {short(bad[0])} is a special file (FIFO, socket or device) and cannot be archived"
+            f"{f' ({len(bad)} in all)' if len(bad) > 1 else ''}; nothing was changed")
     if DRY:
         say(f"  [dry-run] archive {len(dirs)} dir(s) to {root}"); return name
     os.makedirs(root, 0o700)
@@ -1978,15 +2281,31 @@ def rollback(p, name):
     m = load(os.path.join(root, "manifest.json"))
     if os.path.realpath(m.get("profile_path", "")) != p.path:
         die(f"archive {name} belongs to {m.get('profile_path')}, not {p.path}")
-    safety = archive(p, "pre-rollback", list(m["dirs"].values()), {"rollback_of": name})
 
     def files(base):
         return {os.path.relpath(os.path.join(dp, f), base) for dp, _, fs in os.walk(base) for f in fs} \
             if os.path.isdir(base) else set()
+    staging = "imported-staging" + os.sep
+    # Desktop 5 moves an imported session's staged conversation to the CLI home at its first resume. If that
+    # happened since this archive, restoring the old staged copy (and the record pointing at it) would bring back an
+    # older conversation that Desktop's next resume writes over the newer one (mechanics.md §5a).
+    stale = sorted(f"{short(os.path.join(d, f))}" for i, d in m["dirs"].items()
+                   for f in files(os.path.join(root, i)) if f.startswith(staging)
+                   and (not os.path.isfile(os.path.join(d, f)) or
+                        open(os.path.join(root, i, f), "rb").read() != open(os.path.join(d, f), "rb").read()))
+    if stale:
+        die(f"refusing: {len(stale)} imported session(s) were resumed in Desktop since {name} ({', '.join(stale)} "
+            f"changed or moved to the CLI home). Restoring would bring back an older copy of their conversation, "
+            f"which Desktop's next resume would write over the newer one. Nothing was changed. Move the sessions "
+            f"back with `ccd-rehome move` instead.")
+    safety = archive(p, "pre-rollback", list(m["dirs"].values()), {"rollback_of": name})
     for i, d in m["dirs"].items():
         snap = os.path.join(root, i)
         s, c = files(snap), files(d)
         for extra in sorted(c - s):
+            if extra.startswith(staging):        # a conversation Desktop staged after the archive: never removed
+                say(f"  keep {extra} in {short(d)} (Desktop's staged conversation of an imported session)")
+                continue
             say(f"  remove {extra} from {short(d)} (kept in {safety})"); remove(os.path.join(d, extra))
         for f in sorted(s):
             src, dst = os.path.join(snap, f), os.path.join(d, f)
@@ -2024,6 +2343,8 @@ def inventory(p, reg, kind="code"):
                 try:
                     rec = load(r)
                 except (OSError, ValueError):
+                    rec = None
+                if not isinstance(rec, dict):       # validate() reports it; everything else treats it as unreadable
                     rec = None
             out.append((d, a, o, r, rec))
     return out
@@ -2137,7 +2458,9 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
     if n:
         touched = sorted({d for v in picks.values() for d, _, _, _ in v} |
                          {os.path.join(p.store(k), acct, org) for k in picks})
-        errors, drift = validate(touched)
+        errors, drift = validate(touched, picked={r for _, _, r, _ in picks.get("code", [])},
+                                 target=os.path.join(p.store("code"), acct, org), staged_ok=True)
+        hazards = list(validate.hazards)
         if cowork:
             src_cw = [d for d in p.dirs("cowork") if d != os.path.join(p.store("cowork"), acct, org)]
             validate(src_cw)
@@ -2158,9 +2481,7 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
             die("refusing: the files are not in the format this tool knows; nothing was changed. "
                 f"See SKILL.md \"Maintaining this skill\" (or report it: {PROJECT_URL}/issues)")
         if drift and not accept_drift and not DRY:
-            die("refusing: Desktop stores something this tool does not know yet (DRIFT above); nothing was changed.\n"
-                "  Review it with --dry-run. If you are sure it is safe, re-run with --accept-drift. Either way, please "
-                "teach the tool about it (SKILL.md \"Maintaining this skill\") so the next run is clean.")
+            refuse_drift(drift, hazards)
     if not n:
         if not quiet_if_nothing:
             say(f"{p.name}: nothing to move into {email(reg, acct)}"
@@ -2184,7 +2505,7 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
         for d, a, r, rec in items:
             here = os.path.join(target, os.path.basename(r))
             if kind == "code":
-                out = {k: v for k, v in rec.items() if k not in TRANSIENT and k not in ACCOUNT_BOUND}
+                out = portable(rec)
                 if LOCAL_MODEL_RE.match(out.get("model") or ""):
                     out["model"] = FALLBACK_MODEL
                 write_json(here, out); remove(r)
@@ -2192,14 +2513,31 @@ def move(p, reg, to=None, to_org=None, frm=None, only=None, cowork=False, quiet_
                 extra = []
                 if (rec.get("armedWorkAtQuit") or {}).get("backgroundTaskCount"):
                     extra.append(f"{rec['armedWorkAtQuit']['backgroundTaskCount']} queued background task(s) kept")
+                if imported_unresumed(rec):
+                    extra.append(f"imported, not resumed yet: its conversation stays in "
+                                 f"{short(os.path.dirname(rec['stagedTranscriptPath']))} (imported-staging/), where "
+                                 f"Desktop reads it until the first resume")
                 if (rec.get("cwd") or "").startswith(scratch + os.sep) and f"{os.sep}{acct}{os.sep}" not in rec["cwd"]:
-                    extra.append("cwd is in another account's scratch workspace (left in place, still works)")
+                    extra.append(f"WARNING: its folder is {email(reg, a)}'s scratch workspace, left in place: "
+                                 f"when that account is signed in here again, Desktop may delete a scratch workspace "
+                                 f"none of its own sessions uses once it has been idle for 7 days. Copy out what you need")
                 t = transcript(rec.get("cliSessionId"))
                 say(f"  moved {(rec.get('title') or '')[:44]!r:46} from {email(reg, a)[:26]:26}"
                     f" transcript {'ok' if t else 'MISSING'}" + (f"  [{'; '.join(extra)}]" if extra else ""))
             else:
+                cw_rec = None
+                if r.endswith(".json") and os.path.isfile(r):
+                    try:
+                        cw_rec = load(r)
+                    except (OSError, ValueError):
+                        cw_rec = None
                 if DRY:
                     say(f"  [dry-run] move cowork {os.path.basename(r)}")
+                elif isinstance(cw_rec, dict) and ("emailAddress" in cw_rec or "accountName" in cw_rec):
+                    # Desktop 5 puts these in the Cowork session's environment and prompt, and refills them from
+                    # the signed-in account only when they are absent (mechanics.md §5a)
+                    write_json(here, {k: v for k, v in cw_rec.items() if k not in ("emailAddress", "accountName")})
+                    remove(r)
                 else:
                     shutil.move(r, here)
                 say(f"  moved cowork item {os.path.basename(r)} from {email(reg, a)[:26]}")
@@ -2774,7 +3112,8 @@ def move_cli(h, q, only=None, project=None, copy=False, no_memory=False, keep_da
         nside = len(_sidecar_files(h.path, items))
         side = f", and so are those of the {nside} file(s) in its sidecar folder" if nside else ""
         mtime = "the copy's mtime" if copy else "its mtime"
-        if (days is None or age <= days) and s.get("entrypoint") == DESKTOP_ENTRYPOINT and age > cdays:
+        if (days is None or age <= days) and s.get("entrypoint") in DESKTOP_ENTRYPOINTS and cdays is not None \
+                and age > cdays:
             # Kept by the target's rule for Desktop transcripts, but older than cleanupPeriodDays, which an earlier
             # Claude Code applies to it. The terminal `claude` is the version the tool can read; when it is not
             # known, the transcript (or the copy) is re-dated as a terminal one would be.
@@ -3502,7 +3841,7 @@ def transcript_info(path):
                 cwds[d["cwd"]] = cwds.get(d["cwd"], 0) + 1
                 last_cwd = d["cwd"]
             if d.get("entrypoint") and not started:
-                started = "desktop" if d["entrypoint"] == DESKTOP_ENTRYPOINT else "cli"
+                started = "desktop" if d["entrypoint"] in DESKTOP_ENTRYPOINTS else "cli"
             ms = _iso_ms(d.get("timestamp"))
             if ms:
                 t0 = t0 or ms; t1 = ms
@@ -3635,7 +3974,7 @@ def register(p, reg, cli, cwd=None, to=None, to_org=None, title=None, accept_dri
         if prior:
             break
     if prior:
-        keep = {k: v for k, v in prior[1].items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+        keep = portable(prior[1])
         keep.update(cwd=cwd, originCwd=cwd, lastActivityAt=max(keep.get("lastActivityAt") or 0, rec["lastActivityAt"]))
         if title:
             keep["title"] = title
@@ -3669,7 +4008,19 @@ def move_to_profile(p, reg, ids, dest, to=None, to_org=None, accept_drift=False)
     p.require_quit(); q.require_quit()
     for one in ids:
         d, a, r, rec = _record(p, one)
-        body = {k: v for k, v in rec.items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+        errors, drift = validate([d], picked={r})
+        hazards = list(validate.hazards)
+        errors = [x for x in errors if os.path.basename(r) in x or os.path.basename(r) not in x and
+                  not x.split(":", 1)[0].endswith(".json")]
+        for x in errors:
+            say(f"    ERROR  {x}")
+        for x in drift:
+            say(f"    DRIFT  {x}")
+        if errors:
+            die("refusing: the files are not in the format this tool knows; nothing was changed")
+        if drift and not accept_drift and not DRY:
+            refuse_drift(drift, hazards)
+        body = portable(rec)
         say(f"{p.name} -> {q.name}: {rec.get('title')!r}")
         src_arch = archive(p, "move", [d], {"to_profile": q.path, "record": os.path.basename(r)})
         with tempfile.TemporaryDirectory() as td:
@@ -3786,6 +4137,8 @@ def resume_cli(p, reg, only):
 def unregister(p, only):
     p.require_quit()
     d, a, r, rec = _record(p, only)
+    if imported_unresumed(rec):
+        die("refusing: " + imported_note(r, rec))
     cli = rec.get("cliSessionId")
     _, thome, _ = record_transcript(p, cli, discover_cli_homes())    # while the record still counts for the profile
     arch = archive(p, "unregister", [d], {"record": os.path.basename(r), "cli": cli})
@@ -3815,11 +4168,13 @@ def export_record(p, only, out):
     if len(hits) != 1:
         die(f"--only {only[0]!r} matches {len(hits)} records (ids: `ccd-rehome sessions {p.name}`)")
     d, a, r, rec = hits[0]
-    errors, drift = validate([d])
+    errors, drift = validate([d], picked={r})
     errors = [e for e in errors if os.path.basename(r) in e]
     if errors or rec is None:
         die("refusing: " + "; ".join(errors or [f"{r} is unreadable"]))
-    body = {k: v for k, v in rec.items() if k not in ACCOUNT_BOUND and k not in TRANSIENT}
+    if imported_unresumed(rec):
+        die("refusing: " + imported_note(r, rec))
+    body = portable(rec)
     doc = {"format": RECORD_FORMAT, "tool": f"ccd-rehome {VERSION}", "desktop": desktop_version([p.path]),
            "exported_utc": now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"), "record": body,
            "notes": [x for x in drift if os.path.basename(r) in x]}
@@ -3838,7 +4193,7 @@ def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, ac
         die(f"cannot read {path}: {e}")
     if not isinstance(doc, dict) or doc.get("format") != RECORD_FORMAT or not isinstance(doc.get("record"), dict):
         die(f"{path} is not a {RECORD_FORMAT} file (make one with `ccd-rehome export-record`)")
-    rec = dict(doc["record"])
+    rec = portable(dict(doc["record"]))        # export-record already did; a 0.11.1 or hand-made record did not
     if cli:
         rec["cliSessionId"] = cli
     if not re.fullmatch(r"local_" + UUID, rec.get("sessionId") or "") or not isinstance(rec.get("cliSessionId"), str):
@@ -3905,7 +4260,8 @@ def adopt(p, reg, path, to=None, to_org=None, cwd=None, cli=None, title=None, ac
 def describe(p, reg, as_json=False, homes=None):
     """A status row for a Desktop profile. With `homes` (status), `elsewhere` counts per CLI home the records whose
     conversation is in that home and not in ~/.claude, where every Desktop profile is taken to look for it
-    (profile_cli_home says why): `sessions PROFILE` prints the --copy that gives the window a copy."""
+    (profile_cli_home says why): `sessions PROFILE` prints the --copy that gives the window a copy, and
+    `retention_risk` lists the records' conversations Claude Code would delete for their age (retention_risk)."""
     st = p.state()
     acct, org, dst, blocker, _ = plan_target(p, reg) if st["verdict"] == "signed-in" else \
         (None, None, None, f"not signed in ({st['verdict']})", None)
@@ -3919,8 +4275,8 @@ def describe(p, reg, as_json=False, homes=None):
     cw = [x for x in inventory(p, reg, "cowork") if not dst or x[0] != os.path.join(p.store("cowork"), acct, org)]
     elsewhere = {}
     for _, _, _, _, rec in (inv if homes is not None else ()):
-        cli = (rec or {}).get("cliSessionId")
-        th = find_cli_transcript(cli, homes)[1] if cli else None
+        cli = rec.get("cliSessionId") if isinstance(rec, dict) else None
+        th = cli_index(homes).get(cli, (None, None))[1] if isinstance(cli, str) else None
         if th is not None and not th.default:
             elsewhere[th.name] = elsewhere.get(th.name, 0) + 1
     return {"kind": "desktop", "profile": p.name, "path": p.path, "running": bool(p.pids()),
@@ -3929,7 +4285,8 @@ def describe(p, reg, as_json=False, homes=None):
             "last_account_email": email(reg, st["last_account"]) if st["last_account"] else None,
             "cookie_expires": st["cookie_expires"], "active_dir": dst, "blocker": blocker,
             "visible": [{"id": sid_of(r)[6:14], "title": (rec or {}).get("title")} for _, _, _, r, rec in vis],
-            "stranded": stranded, "cowork_stranded": len(cw), "archives": archives(p), "elsewhere": elsewhere}
+            "stranded": stranded, "cowork_stranded": len(cw), "archives": archives(p), "elsewhere": elsewhere,
+            "retention_risk": retention_risk(p, homes, reg) if homes is not None else []}
 
 
 def describe_cli(h, homes, hint=None):
@@ -3941,7 +4298,7 @@ def describe_cli(h, homes, hint=None):
             "verdict": h.signed_in(), "account": a[0] if a else None, "email": a[1] if a else None,
             "last_account_email": None, "cookie_expires": None, "active_dir": None, "blocker": None,
             "visible": [], "stranded": {}, "cowork_stranded": 0, "archives": cli_archives(h), "elsewhere": {},
-            "org": a[2] if a else None, "org_name": a[3] if a else None,
+            "retention_risk": [], "org": a[2] if a else None, "org_name": a[3] if a else None,
             "sessions": len(h.sessions()), "live": len(live), "move": hint["command"], "move_why": hint["why"]}
 
 
@@ -3994,6 +4351,11 @@ def status(targets, reg, as_json, homes=None):
         if r["stranded"] or r["cowork_stranded"]:
             say(f"  -> {'blocked: ' + r['blocker'] if r['blocker'] else 'fix: ccd-rehome rehome ' + r['profile']}"
                 f"   (pick sessions: ccd-rehome sessions {r['profile']})")
+        for x in r["retention_risk"]:
+            say(f"  WARNING: {x['n']} of these sessions' conversations (in {x['home']}) "
+                f"{'is' if x['n'] == 1 else 'are'} older than {x['days']} days, and Claude Code "
+                f"{'deletes' if x['certain'] else 'may delete'} {'it' if x['n'] == 1 else 'them'} at its next start: "
+                f"{x['why']}. Fix: {x['fix']}")
         dshort = short(os.path.realpath(CLI_DEFAULT))
         for hn, n in r["elsewhere"].items():
             say(f"  {n} of these records' conversations {'is' if n == 1 else 'are'} only in {hn}, not in {dshort}, "
@@ -4160,6 +4522,20 @@ def doctor():
             line(bool(p.loaded_lines()) or None, f"{p.name}: Desktop's 'Loaded N persisted sessions from' log line found",
                  "DRIFT: the log format the tool reads (target org, verify) may have changed. Compare a fresh main.log "
                  "with references/mechanics.md §2-3 and update the patterns in Profile.real_inits / loaded_lines")
+    # ---- retention: conversations Claude Code would delete for their age (an older terminal `claude` deletes
+    # Desktop's too). Read-only: transcripts are only stat'ed and their first/last lines read.
+    homes = discover_cli_homes()
+    for x in found:
+        p = Profile(x)
+        if not any(record_conversations(rec) for *_, rec in inventory(p, {})):
+            continue
+        for r in retention_risk(p, homes) or [None]:
+            if r is None:
+                line(True, f"{p.name}: no Desktop conversation is old enough for Claude Code here to delete it")
+                break
+            line(None, f"{p.name}: {r['n']} of {r['of']} Desktop conversation(s) in {r['home']} are older than "
+                       f"{r['days']} days (oldest {r['oldest']}): {r['why']}",
+                 f"Claude Code {'deletes' if r['certain'] else 'may delete'} them at its next start. Fix: {r['fix']}")
     dv = desktop_version(found)
     cn = compat_note(dv)
     line(None if cn else True, f"Desktop {dv or '?'}: " + ("in tested.json" if not cn else "not in tested.json"),
@@ -4515,10 +4891,28 @@ def main():
         acct, org, dst, blocker, _ = plan_target(p, reg)
         if blocker:
             die(f"{p.name}: {blocker}")
-        hits = [(t, int(m.group(2))) for t, m in p.loaded_lines() if os.path.realpath(m.group(3)) == os.path.realpath(dst)]
+        same = lambda m: os.path.realpath(m.group(3)) == os.path.realpath(dst)
+        hits = [(t, m) for t, m in p.loaded_lines() if same(m)]
         if not hits:
             die(f"{p.name}: Desktop has not logged loading {dst} yet. Launch it (and open the Code tab), then re-run")
-        t, got = hits[-1]
+        # Every load of this folder since Desktop last started counts: when the same account signs out and in again,
+        # Desktop reloads the folder but skips the sessions it already holds ("Loaded 0"), so the newest line alone
+        # undercounts. Desktop 5 also loads archived sessions in a second, deferred pass, logged on its own line;
+        # until that line is there, the K the first line announced are still loading.
+        starts = [x for x, _ in p.log_lines(r".*Starting app \{")]
+        since = max((x for x in starts if x <= hits[-1][0]), default=None)
+        hits = [(t, m) for t, m in hits if since is None or t >= since]
+        deferred = [(x, m) for x, m in p.deferred_lines() if same(m)]
+        loads = []
+        for i, (t, m) in enumerate(hits):
+            end = hits[i + 1][0] if i + 1 < len(hits) else None
+            k = next((int(dm.group(2)) for x, dm in deferred if x >= t and (end is None or x < end)), None)
+            pending = int(m.group(4) or 0) if k is None else 0
+            loads.append((int(m.group(2)) + (k or 0), pending, t))
+        got, pending, t = max(loads, key=lambda x: (x[0] + x[1], x[2]))
+        if pending:
+            die(f"{p.name}: Desktop has loaded {got} session(s) and is still loading {pending} archived one(s) "
+                f"(Desktop 5 loads them in a second pass). Wait a few seconds and re-run")
         def created(r):
             try:
                 return (load(r).get("createdAt") or 0) / 1000

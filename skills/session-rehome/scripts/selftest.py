@@ -4118,6 +4118,523 @@ try:
         os.remove(x)
     shutil.rmtree(g7side)
 
+    print("Desktop conversations an older terminal Claude Code deletes for their age (doctor, status)")
+    # Seen on a real Mac: the terminal `claude` was 2.1.119 with no cleanupPeriodDays, and two Desktop records had
+    # lost their conversations. Before 2.1.248 Claude Code deletes EVERY transcript older than cleanupPeriodDays.
+    rh = os.path.join(home, "retention-home"); os.makedirs(rh)
+    rp = profile(rh, "acct-r", signed_in=A, logs=[init("09:00:00", A, OA)])
+    rkey = os.path.join(rh, ".claude", "projects", "-r-proj"); os.makedirs(rkey)
+    R1, R2 = ("7e7e7e7e-0000-4000-8000-00000000000%d" % n for n in (1, 2))
+    for sid, age in ((R1, time.time() - 60 * 86400), (R2, None)):
+        t = os.path.join(rkey, sid + ".jsonl")
+        open(t, "w", encoding="utf-8").write(json.dumps({"type": "user", "uuid": "u1", "cwd": "/r/proj", "sessionId": sid,
+                                                         "entrypoint": "claude-desktop",
+                                                         "message": {"content": "hi"}}) + "\n")
+        if age:
+            os.utime(t, (age, age))
+        rec(os.path.join(rp, "claude-code-sessions", A, OA), sid, "retention " + sid[-1], cliSessionId=sid,
+            cwd="/r/proj")
+    rset = os.path.join(rh, ".claude", "settings.json")
+    r0 = tree_hash(rkey), tree_hash(os.path.join(rp, "claude-code-sessions"))
+    rc, out = run(rh, "doctor", env=VOLD)
+    w = next((l for l in out.splitlines() if "acct-r: 1 of 2 Desktop conversation" in l), "")
+    check("[WARN]" in w and "older than 30 days" in w and "2.1.100" in out and "2.1.248" in out
+          and "cleanupPeriodDays" in out and "settings.json" in out,
+          "doctor: with Claude Code 2.1.100 here, the Desktop conversation older than cleanupPeriodDays (30 by "
+          "default) is named as one it deletes at its next start, with the fix")
+    rc, out = run(rh, "status", "acct-r", env=VOLD)
+    rc2, out2 = run(rh, "status", "acct-r", "--json", env=VOLD)
+    try:
+        risk = json.loads(out2)[0]["retention_risk"]
+    except (ValueError, LookupError, TypeError):
+        risk = None
+    check(rc == 0 and "WARNING: 1 of these sessions' conversations" in out and "older than 30 days" in out
+          and risk and risk[0]["n"] == 1 and risk[0]["of"] == 2 and risk[0]["days"] == 30,
+          "status says the same in text and in --json (retention_risk)")
+    rc, out = run(rh, "status", "--json", env=VOLD)
+    try:
+        rows = json.loads(out)
+    except ValueError:
+        rows = []
+    check(rows and all("retention_risk" in r for r in rows),
+          "every status --json row, a CLI home's too, has retention_risk")
+    rc, out = run(rh, "doctor", env=VNEW)
+    rc2, out2 = run(rh, "doctor", env=VNONE)
+    check("acct-r: no Desktop conversation" in out and "[WARN] acct-r: 1 of" not in out
+          and "acct-r: no Desktop conversation" in out2,
+          "(guard) with Claude Code 2.1.300, or with Desktop's own (no `claude` on PATH), a conversation last "
+          "continued in Desktop is kept at any age: no warning")
+    json.dump({"cleanupPeriodDays": 3650}, open(rset, "w", encoding="utf-8"))
+    rc, out = run(rh, "doctor", env=VOLD)
+    check("acct-r: no Desktop conversation" in out, "(guard) cleanupPeriodDays 3650 removes the warning")
+    json.dump({"desktopSessionCleanupPeriodDays": 45}, open(rset, "w", encoding="utf-8"))
+    rc, out = run(rh, "doctor", env=VNEW)
+    check("acct-r: 1 of 2 Desktop conversation" in out and "desktopSessionCleanupPeriodDays" in out,
+          "with Claude Code 2.1.300, a desktopSessionCleanupPeriodDays shorter than the conversation's age warns")
+    os.remove(rset)
+    check((tree_hash(rkey), tree_hash(os.path.join(rp, "claude-code-sessions"))) == r0,
+          "(fixture) doctor and status changed no conversation and no record")
+    shutil.rmtree(rh)
+
+    print("Desktop 5 (5.11492.0, macOS): log lines, per-account files, imported and scratch sessions")
+    d5h = os.path.join(home, "desktop5-home"); os.makedirs(d5h)
+
+    def d5store(prof, acct, org):
+        return os.path.join(d5h, ".claude-instances", prof, "claude-code-sessions", acct, org)
+    # Per-account files Desktop 5 keeps beside the records: an archived-ids cache, Remote Control delete markers
+    # (64-hex name), the staging folder of imported sessions. Known, and none of them is moved.
+    pe = profile(d5h, "acct-d5e", signed_in=B, logs=[init("09:00:00", B, OB)])
+    se, te = d5store("acct-d5e", A, OA), d5store("acct-d5e", B, OB)
+    rec(se, "e5e5e5e5-0000-4000-8000-000000000001", "plain")
+    rec(te, "e5e5e5e5-0000-4000-8000-000000000009", "already there")
+    json.dump({"v": 1, "archived": ["local_x"]}, open(os.path.join(se, "archived-sessions.idx"), "w", encoding="utf-8"))
+    open(os.path.join(se, "archived-sessions.idx.tmp"), "w", encoding="utf-8").write("{}")
+    owed = os.path.join(se, "owed-bridge-delete_" + "ab" * 32)
+    json.dump({"version": 3, "remoteId": "cse_1", "sessionId": "local_other", "transcriptIds": [], "nonce": "n",
+               "state": "owed", "action": "delete"}, open(owed, "w", encoding="utf-8"))
+    os.makedirs(os.path.join(se, "imported-staging"))
+    rc, out = run(d5h, "doctor")
+    check("session-dir entries: 0 unknown" in out,
+          "doctor: archived-sessions.idx(.tmp), owed-bridge-delete_<hash> and imported-staging/ are known entries")
+    rc, out = run(d5h, "rehome", "acct-d5e")
+    check(rc == 0 and os.path.exists(os.path.join(te, "local_e5e5e5e5-0000-4000-8000-000000000001.json"))
+          and os.path.exists(owed) and not os.path.exists(os.path.join(te, os.path.basename(owed)))
+          and not os.path.exists(os.path.join(te, "archived-sessions.idx")),
+          "a move leaves the Remote Control markers (the old account's) and the archived-ids cache where they are")
+    # A Remote Control delete still in progress ("intent") names a record: moving that record would strand it.
+    rec(se, "e5e5e5e5-0000-4000-8000-000000000002", "being deleted")
+    intent = os.path.join(se, "owed-bridge-delete_" + "cd" * 32)
+    json.dump({"version": 3, "remoteId": "cse_2", "sessionId": "local_e5e5e5e5-0000-4000-8000-000000000002",
+               "transcriptIds": [], "nonce": "n", "state": "intent", "action": "delete"},
+              open(intent, "w", encoding="utf-8"))
+    h_e = tree_hash(os.path.join(pe, "claude-code-sessions"))
+    rc, out = run(d5h, "rehome", "acct-d5e")
+    check(rc != 0 and "DRIFT" in out and "Remote Control" in out and "e5e5e5e5" in out
+          and tree_hash(os.path.join(pe, "claude-code-sessions")) == h_e,
+          "a record named by a Remote Control delete in progress (state intent) is DRIFT: nothing moves")
+    os.remove(intent); os.remove(os.path.join(se, "local_e5e5e5e5-0000-4000-8000-000000000002.json"))
+    # An imported session Desktop has not resumed yet keeps its conversation INSIDE the account folder.
+    cli_i = "e5e5e5e5-0000-4000-8000-0000000000c1"
+    staged = os.path.join(se, "imported-staging", cli_i + ".jsonl")
+    open(staged, "w", encoding="utf-8").write('{"type":"user"}\n')
+    rec(se, "e5e5e5e5-0000-4000-8000-000000000003", "imported", cliSessionId=cli_i,
+        importedFrom="previous-profile-code", stagedTranscriptPath=staged)
+    out_i = os.path.join(d5h, "imported.json")
+    rc, out = run(d5h, "export-record", "acct-d5e", "--only", "e5e5e5e5-0000-4000-8000-000000000003", "--out", out_i)
+    check(rc != 0 and "not resumed yet" in out and "imported-staging" in out and not os.path.exists(out_i),
+          "export-record refuses an imported session not resumed yet: its conversation is in no CLI home")
+    rc, out = run(d5h, "rehome", "acct-d5e")
+    r3t = os.path.join(te, "local_e5e5e5e5-0000-4000-8000-000000000003.json")
+    check(rc == 0 and os.path.exists(r3t) and os.path.exists(staged)
+          and json.load(open(r3t, encoding="utf-8")).get("stagedTranscriptPath") == staged,
+          "within its window it moves to the signed-in account: Desktop keeps reading the staged conversation there")
+    # An unfinished write: Desktop 5 turns local_X.json.tmp into a record at its next start in that folder.
+    rec(se, "e5e5e5e5-0000-4000-8000-000000000004", "half-written")
+    open(os.path.join(se, "local_e5e5e5e5-0000-4000-8000-000000000004.json.tmp"), "w", encoding="utf-8").write("{}")
+    rc, out = run(d5h, "rehome", "acct-d5e")
+    check(rc != 0 and "DRIFT" in out and ".json.tmp" in out and "unfinished write" in out,
+          "a local_*.json.tmp beside the records is DRIFT: Desktop would bring the session back in the old account")
+    os.remove(os.path.join(se, "local_e5e5e5e5-0000-4000-8000-000000000004.json.tmp"))
+    # A session working in a scratch workspace: the folder stays under the old account, whose sweep deletes it.
+    scr = os.path.join(pe, "scratch-workspaces", A, OA, "scratch-2026-11-01-abcdef"); os.makedirs(scr)
+    rec(se, "e5e5e5e5-0000-4000-8000-000000000005", "scratch", cwd=scr)
+    rc, out = run(d5h, "rehome", "acct-d5e")
+    check(rc == 0 and "scratch" in out and "7 days" in out and "delete" in out,
+          "moving a session whose folder is the old account's scratch workspace warns that Desktop deletes it")
+    # Desktop 5 adds a suffix to the line when archived sessions are deferred, and logs those separately.
+    p5 = profile(d5h, "acct-d5", signed_in=C, logs=[])     # C: no other profile here knows its org
+    s5 = os.path.join(p5, "claude-code-sessions")
+    for n, arch in ((1, False), (2, False), (3, True)):
+        rec(os.path.join(s5, C, OC), "d5d5d5d5-0000-4000-8000-00000000000%d" % n, "d5 %d" % n, isArchived=arch)
+    os.makedirs(os.path.join(s5, C, OB))                       # a second org folder: the log must decide
+    rec(os.path.join(s5, A, OA), "d5d5d5d5-0000-4000-8000-000000000009", "to move")
+    open(os.path.join(p5, "logs", "main.log"), "w", encoding="utf-8").write(
+        f"2026-11-12 15:17:13 [info] Loaded 2 persisted sessions from {os.path.join(s5, C, OC)} "
+        f"(1 archived deferred, 1 of them unopened; hint on)\n"
+        f"2026-11-12 15:17:13 [info] Loaded 1 deferred archived sessions from {os.path.join(s5, C, OC)} "
+        f"(after_active, 12 ms)\n")
+    rc, out = run(d5h, "verify", "acct-d5")
+    check(rc == 0 and "OK" in out and "loaded 3 session(s)" in out,
+          "verify reads Desktop 5's line with its archived-deferred suffix, and adds the deferred line's count")
+    rc, out = run(d5h, "rehome", "acct-d5")
+    check(rc == 0 and os.path.exists(os.path.join(s5, C, OC, "local_d5d5d5d5-0000-4000-8000-000000000009.json")),
+          "the target org comes from that line (the path before the suffix), with two org folders to choose from")
+    po = profile(d5h, "acct-d5out", signed_in=B, logs=[
+        "2026-11-12 15:00:00 [info] claude.ai account active and logged in",
+        "2026-11-12 15:16:01 [info] [account] User logged out during account ID wait, stopping early"])
+    rc, out = run(d5h, "status", "acct-d5out", "--json")
+    try:
+        verdict = json.loads(out)[0]["verdict"]
+    except (ValueError, LookupError, TypeError):
+        verdict = None
+    check(verdict == "signed-out", "Desktop 5's 'User logged out during account ID wait' line means signed out")
+    # The 138 record fields Desktop 5.11492.0 can write that 0.11.1 did not know, classified from its code
+    # (references/mechanics.md §5). A record with all of them: none is DRIFT, and each class is handled.
+    AB5 = ["artifactsMcpVouchedCalls", "backgroundTaskSuggestions", "cloudSessionId", "cloudSpawnedTasks",
+           "connectorWireNames", "emailAddress", "enabledMcpTools", "interruptedByQuitAt", "interruptedByQuitFor",
+           "interruptedUnseenResume", "movedToCloud", "remoteControlFollowsStarter", "remoteControlKeptServerCopyId",
+           "remoteControlLiveAtUpdateQuit", "remoteControlSpawn", "remoteControlUserEnabled", "servedConnectorCalls",
+           "spaceId", "sshReattach", "cutTurn"]
+    TR5 = ["coveredError", "errorCategory", "errorCode", "peerInbound", "restartErrorMark", "tccFolderKind"]
+    HB5 = ["btwSharedTree", "cuFlagsGrantedAt", "folderPlace", "folderWorktrees", "keepCoversOwnTree", "keptDirtyAt",
+           "keptDirtyWorktree", "keptWorktreeLeftover", "knownStartedByHostLauncher", "launcherAtSpawn",
+           "launcherUsedAppSignIn", "pendingSystemReminder", "requestedAdditionalFolders", "scratchCarried",
+           "scratchFilesLeftIn", "sharedTreeGone", "sshAddressNeverEdited", "sshConfig", "sshForeignDaemonLossAt",
+           "sshHostChangedAt", "sshKillRecoveryGrantedAt", "sshProcessLossStoodDownAt", "sshRemoteProcessId",
+           "sshRemoteTranscriptPath", "stagedTranscriptPath", "tasksStoppedAt", "tasksStoppedEnded", "worktreeLazy",
+           "worktreeName", "worktreePath", "writtenRepositories", "wslConfig"]
+    KP5 = ["_startedThroughHostCliLauncher", "adoptedFromOtherSurface", "agent", "asides", "autoArchiveExempt",
+           "autoArchiveOnPrClose", "autoFixDelivered", "autoFixNoticeSent", "autoSendsPausedAfterDelete", "branch",
+           "btwLoweredFrom", "bypassChosenInApp", "cliMcpAppServerNames", "color", "connectionTriesSincePerson",
+           "contextRecovery", "conversationPluginLoaded", "cutTurnChain", "cutTurnStoppedAt",
+           "dispatchParentId", "dispatchParentOrigin", "durableCronMade", "effortInherited", "endedIdleAsOf",
+           "forkedAtMessageUuid", "forkedFromSessionId", "fromCliTranscript", "givenUpCliSessionIds",
+           "historyOnlyCliSessionId", "importedFrom", "importedRunOf", "indexedAt", "isStarred", "lanyardOfferPrompt",
+           "lastTurnReport", "lastTurnStopped", "launcherMarked", "lineageDetached", "lineageDetachedBy",
+           "midTaskReplyTool", "overflowCliSessionIds", "overflowRemoteCliSessionIds", "peerMessaged", "peerReceipts",
+           "pendingFirstStart", "permissionModePicked", "priorCliSessionLeftAt", "priorRemoteCliSessionIds", "prs",
+           "queuedSideSessionNotes", "recap", "recapAt", "remoteControlDescendant", "resumeConfirmed",
+           "scheduledRunContinued", "scheduledTaskId", "seenCommentIds", "setupTools", "sideSessionNotes",
+           "sideSessionOffersMuted", "sideSessionReportOwed", "sideSessionStartsSinceUserMessage",
+           "sideSessionWakesSinceUserMessage", "simulatorToolsUsed", "sourceBranch", "spawnedFromEndNotified",
+           "startChain", "stoppedUntilPersonSends", "subagentsTruncatedFor", "surfaceNoticeUuid", "titleCheck",
+           "titleFromPr", "titleOffers", "titleSuggestionsOff", "transcriptCuts", "violinBow", "violinBowHomeSettings",
+           "violinBowPromptKinds", "violinBowPrompts"]       # + remoteClientLimits (KEEP), absent here on purpose
+    check(len(set(AB5 + TR5 + HB5 + KP5)) == 137, "(fixture) 137 distinct new fields, plus remoteClientLimits")
+    pf = profile(d5h, "acct-d5f", signed_in=B, logs=[init("09:00:00", B, OB)])
+    sf = os.path.join(pf, "claude-code-sessions")
+    vals = {k: True for k in AB5 + TR5 + HB5 + KP5}
+    vals.update(remoteControlSpawn={"ccrSessionId": "cse_x", "folder": "/p"}, emailAddress="old@example.com",
+                subagentsTruncatedFor="cli-f5f5f5f5-0000-4000-8000-000000000001", interruptedAwaitingPerson=True,
+                importedFrom="previous-profile-code", resumeConfirmed=True, stagedTranscriptPath="/gone/x.jsonl")
+    rec(os.path.join(sf, A, OA), "f5f5f5f5-0000-4000-8000-000000000001", "every Desktop 5 field", **vals)
+    rc, out = run(d5h, "doctor")
+    check("0 unknown field(s)" in out, "doctor: none of the 138 Desktop 5 fields is unknown")
+    rc, out = run(d5h, "rehome", "acct-d5f")
+    mf = os.path.join(sf, B, OB, "local_f5f5f5f5-0000-4000-8000-000000000001.json")
+    mr = json.load(open(mf, encoding="utf-8")) if os.path.exists(mf) else {}
+    check(rc == 0 and mr and not set(AB5 + TR5 + ["interruptedAwaitingPerson"]) & set(mr),
+          "an account move drops the 20 account-bound fields (old email, cloud, Remote Control, connector ids, an "
+          "owed SSH turn) and the 6 transient ones, and interruptedAwaitingPerson with its quit mark")
+    check(set(HB5 + KP5) <= set(mr) and mr.get("subagentsTruncatedFor") == vals["subagentsTruncatedFor"],
+          "it keeps the 32 machine-bound and the 80 session-state fields (subagentsTruncatedFor among them)")
+    check(mr.get("remoteClientLimits") is True,
+          "dropping remoteControlSpawn keeps Desktop's clamp: remoteClientLimits is set (never bypass permissions)")
+    out_f5 = os.path.join(d5h, "exported5.json")
+    rc, out = run(d5h, "export-record", "acct-d5f", "--only", "f5f5f5f5", "--out", out_f5)
+    ex5 = (json.load(open(out_f5, encoding="utf-8")) if os.path.exists(out_f5) else {}).get("record", {})
+    profile(d5h, "acct-d5g", signed_in=C, logs=[init("09:00:00", C, OC)])
+    rc, out = run(d5h, "adopt", "acct-d5g", "--record", out_f5, "--cwd", "/new/host/proj")
+    ad = glob.glob(os.path.join(d5h, ".claude-instances", "acct-d5g", "claude-code-sessions", C, OC, "local_*.json"))
+    ar = json.load(open(ad[0], encoding="utf-8")) if ad else {}
+    check(ex5.get("remoteClientLimits") is True and ar and not set(AB5 + TR5 + HB5) & set(ar)
+          and set(KP5) <= set(ar) and ar.get("remoteClientLimits") is True,
+          "export-record + adopt --cwd (another machine) also drop the 32 machine-bound fields, keep the clamp")
+    shutil.rmtree(d5h)
+
+    print("0.11.2 review: the Desktop 5 guards per session, --to-profile, rollback, adopt and the Remote Control clamps")
+    rvh = os.path.join(home, "review-home"); os.makedirs(rvh)
+
+    def rvstore(prof, acct, org):
+        return os.path.join(rvh, ".claude-instances", prof, "claude-code-sessions", acct, org)
+    X, Y, Z = ("9a9a9a9a-0000-4000-8000-00000000000%d" % n for n in (1, 2, 3))
+    pw = profile(rvh, "acct-w", signed_in=B, logs=[init("09:00:00", B, OB)])
+    sw, tw = rvstore("acct-w", A, OA), rvstore("acct-w", B, OB)
+    profile(rvh, "acct-v", signed_in=C, logs=[init("09:00:00", C, OC)])
+    tv = rvstore("acct-v", C, OC)
+    rec(sw, X, "X"); rec(sw, Y, "Y"); os.makedirs(tw)
+    # Guards for OTHER sessions, or in the target, do not block a move of X
+    json.dump({"version": 3, "remoteId": "cse_y", "sessionId": "local_" + Y, "transcriptIds": [], "nonce": "n",
+               "state": "intent", "action": "delete"}, open(os.path.join(sw, "owed-bridge-delete_" + "1f" * 32), "w", encoding="utf-8"))
+    open(os.path.join(sw, "local_%s.json.tmp" % Y), "w", encoding="utf-8").write("{}")
+    json.dump({"version": 3, "remoteId": "cse_z", "sessionId": "local_zz", "transcriptIds": [], "nonce": "n",
+               "state": "intent", "action": "delete"}, open(os.path.join(tw, "owed-bridge-delete_" + "2e" * 32), "w", encoding="utf-8"))
+    open(os.path.join(tw, "local_zz.json.tmp"), "w", encoding="utf-8").write("{}")
+    os.makedirs(os.path.join(tw, "imported-staging"))
+    zst = os.path.join(tw, "imported-staging", "cli-z.jsonl"); open(zst, "w", encoding="utf-8").write("{}\n")
+    rec(tw, Z, "Z imported", cliSessionId="cli-z", importedFrom="previous-profile-code", stagedTranscriptPath=zst)
+    rc, out = run(rvh, "move", "acct-w", "--only", X)
+    check(rc == 0 and os.path.exists(os.path.join(tw, "local_%s.json" % X)),
+          "Desktop 5 guards are per session: another session's Remote Control delete or unfinished write, and "
+          "anything in the target folder, do not block moving X")
+    # ... but X's own fresh unfinished write does, with a message that names the hazard
+    if os.path.exists(os.path.join(tw, "local_%s.json" % X)):
+        run(rvh, "rollback", "acct-w", newest(rvh, "acct-w"))
+    open(os.path.join(sw, "local_%s.json.tmp" % X), "w", encoding="utf-8").write("{}")
+    rc, out = run(rvh, "move", "acct-w", "--only", X)
+    check(rc != 0 and "unfinished write" in out and "not safe to move yet" in out and "does not know" not in out
+          and os.path.exists(os.path.join(sw, "local_%s.json" % X)),
+          "X's own unfinished write (under 30 days) refuses, saying what is unsafe, not 'unknown'")
+    old = time.time() - 40 * 86400
+    os.utime(os.path.join(sw, "local_%s.json.tmp" % X), (old, old))
+    rc, out = run(rvh, "move", "acct-w", "--only", X, "--dry-run")
+    check(rc == 0 and "unfinished write" not in out,
+          "(guard) a .tmp older than 30 days is not a hazard: Desktop no longer restores a record from it")
+    os.utime(os.path.join(sw, "local_%s.json.tmp" % X), None)
+    # --to-profile applies the same guards to the source (it validated only a copy of the record before)
+    h_w = tree_hash(os.path.join(pw, "claude-code-sessions"))
+    rc, out = run(rvh, "move", "acct-w", "--only", X, "--to-profile", "acct-v")
+    check(rc != 0 and "unfinished write" in out and tree_hash(os.path.join(pw, "claude-code-sessions")) == h_w
+          and not glob.glob(os.path.join(tv, "local_*.json")),
+          "move --to-profile refuses X's unfinished write too, before anything is written")
+    os.remove(os.path.join(sw, "local_%s.json.tmp" % X))
+    mx = os.path.join(sw, "owed-bridge-delete_" + "3d" * 32)
+    json.dump({"version": 3, "remoteId": "cse_x", "sessionId": "local_" + X, "transcriptIds": [], "nonce": "n",
+               "state": "intent", "action": "delete"}, open(mx, "w", encoding="utf-8"))
+    rc, out = run(rvh, "move", "acct-w", "--only", X, "--to-profile", "acct-v")
+    check(rc != 0 and "Remote Control" in out and not glob.glob(os.path.join(tv, "local_*.json")),
+          "move --to-profile refuses a session with a Remote Control delete in progress")
+    os.remove(mx)
+    # An imported session not resumed yet: fine within the window (the absolute path keeps working), refused
+    # to another window, by export-record and by unregister (its conversation is in no CLI home)
+    xst_dir = os.path.join(sw, "imported-staging"); os.makedirs(xst_dir)
+    xst = os.path.join(xst_dir, "cli-x.jsonl"); open(xst, "w", encoding="utf-8").write('{"turn": 1}\n')
+    rx = json.load(open(os.path.join(sw, "local_%s.json" % X), encoding="utf-8"))
+    rx.update(cliSessionId="cli-x", importedFrom="previous-profile-code", stagedTranscriptPath=xst)
+    json.dump(rx, open(os.path.join(sw, "local_%s.json" % X), "w", encoding="utf-8"))
+    for args_, what in ((("move", "acct-w", "--only", X, "--to-profile", "acct-v"), "move --to-profile"),
+                        (("export-record", "acct-w", "--only", X, "--out", os.path.join(rvh, "x.json")),
+                         "export-record"),
+                        (("unregister", "acct-w", "--only", X), "unregister")):
+        rc, out = run(rvh, *args_)
+        check(rc != 0 and "not resumed yet" in out and os.path.exists(os.path.join(sw, "local_%s.json" % X)),
+              f"{what} refuses an imported session not resumed yet (its conversation is only in imported-staging/)")
+    rc, out = run(rvh, "move", "acct-w", "--only", X)
+    mxr = os.path.join(tw, "local_%s.json" % X)
+    check(rc == 0 and os.path.exists(mxr) and json.load(open(mxr, encoding="utf-8")).get("stagedTranscriptPath") == xst
+          and os.path.exists(xst) and "imported-staging" in out,
+          "a move within the window takes it, keeps the path to its staged conversation, and says where it stays")
+    # Desktop resumes it under the new account: the staged copy goes to the CLI home and the record is confirmed.
+    # A rollback would restore the old staged copy, which Desktop would later write over the newer conversation.
+    arch_x = newest(rvh, "acct-w") if os.path.exists(mxr) else "19700101T000000Z-move"
+    if os.path.exists(xst):
+        os.remove(xst)
+    rx = json.load(open(mxr, encoding="utf-8")) if os.path.exists(mxr) else dict(rx)
+    rx.pop("stagedTranscriptPath", None); rx["resumeConfirmed"] = True
+    json.dump(rx, open(mxr, "w", encoding="utf-8"))
+    h_w = tree_hash(os.path.join(pw, "claude-code-sessions"))
+    rc, out = run(rvh, "rollback", "acct-w", arch_x)
+    check(rc != 0 and "resumed" in out and tree_hash(os.path.join(pw, "claude-code-sessions")) == h_w,
+          "rollback refuses when an imported session was resumed since: its old staged copy would come back")
+    os.remove(mxr)
+    # A special file where Desktop keeps a known entry: refused cleanly, before an archive is started
+    if hasattr(os, "mkfifo"):
+        adir = os.path.join(sdir(rvh), "archive", "acct-w")
+        n_arch = len(os.listdir(adir)) if os.path.isdir(adir) else 0
+        os.mkfifo(os.path.join(sw, "archived-sessions.idx"))
+        rc, out = run(rvh, "move", "acct-w", "--only", Y, "--accept-drift", timeout=60)
+        n_arch2 = len(os.listdir(adir)) if os.path.isdir(adir) else 0
+        check(rc not in (0, None) and "ERROR" in out and "Traceback" not in out and n_arch2 == n_arch,
+              "a FIFO named archived-sessions.idx is an ERROR: no crash, no half-made archive")
+        os.remove(os.path.join(sw, "archived-sessions.idx"))
+    # adopt strips what export-record would have: a 0.11.1 or hand-made record keeps none of the old account's state
+    raw = {"format": "ccd-record/1", "record": {
+        "sessionId": "local_9a9a9a9a-0000-4000-8000-000000000007", "cliSessionId": "cli-adopted", "title": "raw",
+        "cwd": "/p", "emailAddress": "old@example.com", "remoteControlUserEnabled": True,
+        "remoteControlSpawn": {"ccrSessionId": "cse_1", "folder": "/p"}, "movedToCloud": {"cloudSessionId": "s"},
+        "interruptedByQuitAt": 1, "peerInbound": {"u": {}}, "error": "x"}}
+    json.dump(raw, open(os.path.join(rvh, "raw.json"), "w", encoding="utf-8"))
+    rc, out = run(rvh, "adopt", "acct-v", "--record", os.path.join(rvh, "raw.json"))
+    ad = [json.load(open(f, encoding="utf-8")) for f in glob.glob(os.path.join(tv, "local_*.json"))]
+    ad = next((r for r in ad if r.get("cliSessionId") == "cli-adopted"), {})
+    check(rc == 0 and ad and not {"emailAddress", "remoteControlUserEnabled", "remoteControlSpawn", "movedToCloud",
+                                  "interruptedByQuitAt", "peerInbound", "error"} & set(ad)
+          and ad.get("remoteClientLimits") is True and ad.get("remoteControlDescendant") is True,
+          "adopt drops account-bound and transient fields itself, and keeps both Remote Control clamps")
+    # The Remote Control lineage and request, an owed SSH turn, a cut first SSH turn, computer-use grants
+    rec(sw, "9a9a9a9a-0000-4000-8000-000000000004", "root started from Remote Control",
+        remoteControlSpawn={"ccrSessionId": "cse_r", "folder": "/p"}, remoteControlUserEnabled=False,
+        pendingFirstStart={"since": 1, "options": {"remoteControlAtStart": True, "useWorktree": True}},
+        sshConfig={"sshHost": "h"}, cutTurn={"state": "owed", "at": 1}, cuGrantFlags={"clipboardRead": True})
+    rec(sw, "9a9a9a9a-0000-4000-8000-000000000005", "first SSH turn cut", cliSessionId=None, sshConfig={"sshHost": "h"},
+        sshRemoteProcessId=77, sshReattach={"processId": 77, "namedCliSessionId": "abcd-named"})
+    rc, out = run(rvh, "move", "acct-w", "--only", "9a9a9a9a-0000-4000-8000-000000000004",
+                  "9a9a9a9a-0000-4000-8000-000000000005")
+    m4 = json.load(open(os.path.join(tw, "local_9a9a9a9a-0000-4000-8000-000000000004.json"), encoding="utf-8")) \
+        if os.path.exists(os.path.join(tw, "local_9a9a9a9a-0000-4000-8000-000000000004.json")) else {}
+    m5 = json.load(open(os.path.join(tw, "local_9a9a9a9a-0000-4000-8000-000000000005.json"), encoding="utf-8")) \
+        if os.path.exists(os.path.join(tw, "local_9a9a9a9a-0000-4000-8000-000000000005.json")) else {}
+    check(rc == 0 and m4.get("remoteControlDescendant") is True and m4.get("remoteClientLimits") is True,
+          "a root session started from Remote Control keeps its lineage (remoteControlDescendant) when its spawn "
+          "id is dropped")
+    check(m4.get("pendingFirstStart") == {"since": 1, "options": {"useWorktree": True}},
+          "a held first start loses remoteControlAtStart (Desktop would otherwise derive a Remote Control request "
+          "under the new account), and keeps its other options")
+    check("cutTurn" not in m4 and m4.get("cuGrantFlags") == {"clipboardRead": True},
+          "an owed SSH turn (cutTurn) is dropped like the quit-resume marks; computer-use grants stay on this machine")
+    check(m5.get("cliSessionId") == "abcd-named",
+          "a cut first SSH turn keeps its conversation: its id moves from sshReattach into cliSessionId")
+    out_g = os.path.join(rvh, "g.json")
+    run(rvh, "export-record", "acct-w", "--only", "9a9a9a9a-0000-4000-8000-000000000004", "--out", out_g)
+    rc, out = run(rvh, "adopt", "acct-v", "--record", out_g, "--cwd", "/new/p")
+    g = next((json.load(open(f, encoding="utf-8")) for f in glob.glob(os.path.join(tv, "local_*.json"))
+              if json.load(open(f, encoding="utf-8")).get("title") == "root started from Remote Control"), {})
+    check(rc == 0 and g and "cuGrantFlags" not in g, "adopt --cwd drops computer-use grant flags with their app list")
+    # Cowork records carry the account's email and name into the session's environment: a move drops them
+    cw = os.path.join(pw, "local-agent-mode-sessions", A, OA); os.makedirs(cw)
+    json.dump({"sessionId": "local_cw1", "emailAddress": "old@example.com", "accountName": "Old", "title": "cw"},
+              open(os.path.join(cw, "local_cw1.json"), "w", encoding="utf-8"))
+    rc, out = run(rvh, "move", "acct-w", "--include-cowork", "--only", "cw1")
+    cwm = os.path.join(pw, "local-agent-mode-sessions", B, OB, "local_cw1.json")
+    cj = json.load(open(cwm, encoding="utf-8")) if os.path.exists(cwm) else {}
+    check(rc == 0 and cj.get("title") == "cw" and not {"emailAddress", "accountName"} & set(cj),
+          "a Cowork move drops the old account's emailAddress and accountName (Desktop refills them)")
+    shutil.rmtree(rvh)
+
+    print("0.11.2 review: reading Desktop's log (shared macOS log, same-second order, transitional lines, verify)")
+    lh = os.path.join(home, "log-home"); os.makedirs(os.path.join(lh, ".claude", "projects"))
+    menv = {"CCD_REHOME_PLATFORM": "darwin"}
+    ldef = os.path.join(lh, "Library", "Application Support", "Claude")
+    lacc = os.path.join(lh, ".claude-instances", "acct-l")
+    for pp in (ldef, lacc):
+        profile(home, pp); shutil.rmtree(os.path.join(pp, "logs"))
+    os.makedirs(os.path.join(lh, "Library", "Logs", "Claude"))
+    llog = os.path.join(lh, "Library", "Logs", "Claude", "main.log")
+    with open(llog, "w", encoding="utf-8") as f:
+        f.write(f"2026-11-12 09:00:00 [info] Loaded 0 persisted sessions from {ldef}/claude-code-sessions/{B}/{OB}\n")
+        f.write("2026-11-12 09:30:00 [info] [account] User is logged out, skipping account ID wait\n")
+        f.write("2026-11-12 09:30:00 [info] [account] User logged out during account ID wait, stopping early\n")
+    rc, out = run(lh, "status", "default", "--json", env=menv)
+    try:
+        v = json.loads(out)[0]["verdict"]
+    except (ValueError, LookupError, TypeError):
+        v = None
+    check(v == "signed-in", "macOS, two windows on one log: another window's signed-out launch lines (no path) do not "
+                            "sign this one out; its cookie and lastKnownAccountUuid decide")
+    shutil.rmtree(lacc)
+    with open(llog, "w", encoding="utf-8") as f:
+        f.write(f"2026-11-12 09:00:00 [info] Loaded 0 persisted sessions from {ldef}/claude-code-sessions/{B}/{OB}\n")
+        f.write(f"2026-11-12 09:30:00 [info] [account] Login-state transition (loggedOut: false \u2192 true, uuid: {B} "
+                f"\u2192 <none>), clearing oauth cache\n")
+    rc, out = run(lh, "status", "default", "--json", env=menv)
+    try:
+        v = json.loads(out)[0]["verdict"]
+    except (ValueError, LookupError, TypeError):
+        v = None
+    check(v == "signed-out", "(guard) macOS, the default window alone on its log: its sign-out line still counts")
+    pl = profile(lh, "acct-same", signed_in=B, logs=[
+        "2026-11-12 15:16:02 [info] [account] User logged out during account ID wait, stopping early",
+        f"2026-11-12 15:16:02 [info] [account] Login-state transition (loggedOut: true \u2192 false, uuid: <none> "
+        f"\u2192 {B}), clearing oauth cache",
+        "2026-11-12 15:16:02 [info] claude.ai account active and logged in"])
+    rc, out = run(lh, "status", "acct-same", "--json")
+    try:
+        v = json.loads(out)[0]["verdict"]
+    except (ValueError, LookupError, TypeError):
+        v = None
+    check(v == "signed-in", "a sign-out and a sign-in in the same second: the log's order decides (signed in)")
+    pt = profile(lh, "acct-trans", signed_in=A, logs=[])
+    st_ = os.path.join(pt, "claude-code-sessions")
+    open(os.path.join(pt, "logs", "main.log"), "w", encoding="utf-8").write(
+        init("08:00:00", A, OA).replace("2026-11-07", "2026-11-12") + "\n" +
+        init("09:00:00", A, OB).replace("2026-11-07", "2026-11-12") + "\n" +
+        f"2026-11-12 09:00:01 [info] Loaded 0 persisted sessions from {st_}/{A}/{OB} (1 archived deferred, 1 of them "
+        f"unopened; hint used)\n" + init("09:00:02", B, OB).replace("2026-11-07", "2026-11-12") + "\n")
+    rc, out = run(lh, "status", "acct-trans", "--json")
+    try:
+        ad_ = json.loads(out)[0]["active_dir"]
+    except (ValueError, LookupError, TypeError):
+        ad_ = None
+    check(ad_ == os.path.join(st_, A, OA), "a transitional (old account, new org) init is skipped even when its "
+                                          "Loaded line is a second later: the account's own org is found")
+    pv = profile(lh, "acct-ver", signed_in=B, logs=[])
+    dv = os.path.join(pv, "claude-code-sessions", B, OB)
+    for n, arch in ((1, False), (2, True), (3, True)):
+        rec(dv, "7c7c7c7c-0000-4000-8000-00000000000%d" % n, "v%d" % n, isArchived=arch)
+    open(os.path.join(pv, "logs", "main.log"), "w", encoding="utf-8").write(
+        "2026-11-12 15:17:12 [info] Starting app {\n"
+        f"2026-11-12 15:17:13 [info] Loaded 1 persisted sessions from {dv} (2 archived deferred, 2 of them unopened; "
+        f"hint used)\n")
+    rc, out = run(lh, "verify", "acct-ver")
+    check(rc != 0 and "MISMATCH" not in out and "archived" in out and "re-run" in out,
+          "verify while Desktop 5's deferred pass is still loading 2 archived sessions: 'wait and re-run', not "
+          "MISMATCH")
+    open(os.path.join(pv, "logs", "main.log"), "w", encoding="utf-8").write(
+        "2026-11-12 15:17:12 [info] Starting app {\n"
+        f"2026-11-12 15:17:13 [info] Loaded 3 persisted sessions from {dv}\n"
+        f"2026-11-12 15:40:00 [info] Loaded 0 persisted sessions from {dv}\n")
+    rc, out = run(lh, "verify", "acct-ver")
+    check(rc == 0 and "OK" in out, "verify after the same account signed out and in again in one launch (Desktop "
+                                   "reloads 0, keeping the 3 it has): OK from the launch's full load")
+    shutil.rmtree(lh)
+
+    print("0.11.2 review: the retention warning (crashes, cost, earlier conversations, rows, Desktop entrypoints)")
+    th = os.path.join(home, "ret2-home"); os.makedirs(th)
+    tp = profile(th, "acct-t", signed_in=A, logs=[init("09:00:00", A, OA)])
+    tdir = os.path.join(tp, "claude-code-sessions", A, OA)
+    tkey = os.path.join(th, ".claude", "projects", "-t-proj"); os.makedirs(tkey)
+    old60 = time.time() - 60 * 86400
+
+    def tconv(sid, eps, age=None):
+        t = os.path.join(tkey, sid + ".jsonl")
+        with open(t, "w", encoding="utf-8") as f:
+            for n, ep in enumerate(eps):
+                f.write(json.dumps({"type": "user", "uuid": "u%d" % n, "cwd": "/t", "sessionId": sid, "entrypoint": ep,
+                                    "message": {"content": "x"}}) + "\n")
+        if age:
+            os.utime(t, (age, age))
+        return t
+    T0, T1, T2, T3, T4 = ("5e5e5e5e-0000-4000-8000-00000000000%d" % n for n in range(5))
+    tconv(T0, ["claude-desktop"], old60); tconv(T1, ["claude-desktop"])
+    rec(tdir, T1, "current fresh, earlier one old", cliSessionId=T1, priorCliSessionIds=[T0])
+    rc, out = run(th, "doctor", env=VOLD)
+    check("acct-t: 1 of 2 Desktop conversation" in out,
+          "an earlier conversation of a record (priorCliSessionIds) is checked too: Claude Code 2.1.100 deletes it")
+    rec(tdir, "5e5e5e5e-0000-4000-8000-0000000000aa", "same conversation again", cliSessionId=T1,
+        priorCliSessionIds=[T0])
+    rc, out = run(th, "doctor", env=VOLD)
+    check("acct-t: 1 of 2 Desktop conversation" in out, "a conversation two records name is counted once")
+    os.remove(os.path.join(tdir, "local_5e5e5e5e-0000-4000-8000-0000000000aa.json"))
+    open(os.path.join(tdir, "local_5e5e5e5e-0000-4000-8000-0000000000bb.json"), "w", encoding="utf-8").write('"x"')
+    rec(tdir, "5e5e5e5e-0000-4000-8000-0000000000cc", "bad id", cliSessionId=12345)
+    rc, out = run(th, "doctor", env=VOLD)
+    rc2, out2 = run(th, "status", env=VOLD)
+    check("Traceback" not in out + out2 and "acct-t:" in out and rc2 == 0,
+          "doctor and status survive a record that is not an object and a cliSessionId that is not a string")
+    os.remove(os.path.join(tdir, "local_5e5e5e5e-0000-4000-8000-0000000000bb.json"))
+    os.remove(os.path.join(tdir, "local_5e5e5e5e-0000-4000-8000-0000000000cc.json"))
+    odd = os.path.join(home, "fake-claude-odd"); os.makedirs(odd)
+    if not sys.platform.startswith("win"):
+        with open(os.path.join(odd, "claude"), "wb") as f:
+            f.write(b"#!/bin/sh\nprintf '\\351 2.1.100 (Claude Code)\\n'\nprintf '\\377' >&2\n")
+        os.chmod(os.path.join(odd, "claude"), 0o755)
+        rc, out = run(th, "status", env={"PATH": odd + os.pathsep + os.environ.get("PATH", "")})
+        check(rc == 0 and "Traceback" not in out, "a `claude --version` that prints bytes that are not UTF-8 crashes nothing")
+        marker = os.path.join(home, "claude-ran")
+        with open(os.path.join(odd, "claude"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\ntouch '" + marker + "'\necho '2.1.100 (Claude Code)'\n")
+        tempty = profile(th, "acct-empty", signed_in=A, logs=[init("09:00:00", A, OA)])
+        rc, out = run(th, "status", "acct-empty", env={"PATH": odd + os.pathsep + os.environ.get("PATH", "")})
+        check(rc == 0 and not os.path.exists(marker),
+              "status runs `claude --version` only when a conversation is old enough for the answer to matter")
+    tset = os.path.join(th, ".claude", "settings.json")
+    for val, why in (("1e999", "a value too large for a number"), ("0", "0 (a settings error: Claude Code pauses")):
+        open(tset, "w", encoding="utf-8").write('{"cleanupPeriodDays": %s}' % val)
+        rc, out = run(th, "doctor", env=VOLD)
+        check("Traceback" not in out and "acct-t: no Desktop conversation" in out,
+              f"cleanupPeriodDays {why}{' its cleanup)' if val == '0' else ''}: no crash, no warning")
+    os.remove(tset)
+    tconv(T2, ["claude-desktop-3p"], old60); tconv(T3, ["local-agent"], old60)
+    tconv(T4, ["cli", "cli"], time.time() - 40 * 86400)
+    for sid in (T2, T3, T4):
+        rec(tdir, sid, "conv " + sid[-1], cliSessionId=sid)
+    open(tset, "w", encoding="utf-8").write('{"desktopSessionCleanupPeriodDays": 45}')
+    rc, out = run(th, "status", "acct-t", "--json", env=VNEW)
+    try:
+        rr = json.loads(out)[0]["retention_risk"]
+    except (ValueError, LookupError, TypeError):
+        rr = []
+    by = {r.get("setting"): r for r in rr}
+    check(by.get("desktopSessionCleanupPeriodDays", {}).get("n") == 3 and by.get("cleanupPeriodDays", {}).get("n") == 1,
+          "Claude Code 2.1.300: one row per setting: the three Desktop conversations (claude-desktop, "
+          "claude-desktop-3p, Cowork's local-agent) under desktopSessionCleanupPeriodDays 45, the terminal one under "
+          "cleanupPeriodDays 30")
+    rc, out = run(th, "status", "acct-t", env=VNEW)
+    check("may delete" in out, "with Claude Code 2.1.248 or later the warning says 'may delete' (settings this tool "
+                               "models from the documentation), not that it will")
+    os.remove(tset)
+    shutil.rmtree(th)
+
 finally:
     shutil.rmtree(home)
 print(f"\n{'ALL PASS' if not fails else str(len(fails)) + ' FAILED'}")

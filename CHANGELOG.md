@@ -4,6 +4,88 @@ One version for the whole project: both tools (`ccd-rehome`, `st-bundle`) and th
 says what changed, what was tested, and what was not. Dates are when the change was made; Desktop and CLI
 versions are the ones it was measured against.
 
+## 0.11.2 — 2026-11-12
+
+**Claude Desktop 5.** On a real Mac, Desktop 4.23118.1 wrote a record field the tool did not know
+(`subagentsTruncatedFor`), and every move there refused it; the same day Desktop updated itself to 5.11492.0.
+Desktop 5's own code was then read for everything the tool relies on (`references/mechanics.md` §5a).
+- **Record fields:** Desktop 5 can write 214; 138 were unknown. Each is now classified, from its writers and
+  readers in Desktop's code, and checked again by a second reader trying to refute it (9 changed):
+  - 20 belong to the old account and are dropped by a move: its email (`emailAddress`), its claude.ai cloud,
+    Remote Control, connector, artifact and Space ids, `sshReattach`, an SSH turn owed a continuation (`cutTurn`),
+    and the quit-resume marks, with which `interruptedAwaitingPerson` (known since 4.x) now goes;
+  - 6 are transient, 32 machine-bound (kept on this machine, dropped by `adopt --cwd`; `cuGrantFlags`, known since
+    4.x, joins them), 80 plain session state;
+  - every field, its class and the reason: `references/desktop5-fields.md`.
+- **What a move, `export-record` and `adopt` carry over** (`portable()`; `adopt` now applies it itself, so a record
+  exported by 0.11.1 or written by hand keeps none of the old account's fields either):
+  - a session started from Remote Control keeps both Desktop clamps: never bypass permissions
+    (`remoteClientLimits`) and the Remote Control restrictions (`remoteControlDescendant`);
+  - a held first start loses `remoteControlAtStart`, which Desktop would otherwise read as a Remote Control request
+    under the new account;
+  - an SSH session whose first turn was cut keeps its conversation id (copied from `sshReattach` to
+    `cliSessionId`, as Desktop does at load).
+- **New files in the account folders**, checked per session moved (another session's files, and anything in the
+  target folder, do not block a move):
+  - `archived-sessions.idx` (a cache) and `owed-bridge-delete_*` (Remote Control deletes the old account owes) are
+    known and left in place. A move refuses (DRIFT) while one of those deletes is in progress for a session it
+    takes.
+  - An imported session not resumed yet keeps its conversation in `imported-staging/` inside the account folder.
+    It moves within its window (Desktop keeps reading it there); `move --to-profile`, `export-record` and
+    `unregister` refuse it. `rollback` refuses to bring back a staged conversation Desktop has resumed since.
+  - A `local_<id>.json.tmp` of a session being moved, at most 30 days old (Desktop would turn it back into a
+    record), is DRIFT. A special file (FIFO, socket) where Desktop keeps one of these is an ERROR, before anything
+    is written.
+  - `move --to-profile` now runs these checks on the source folder too; before, it validated only a copy of the
+    record.
+- **Log lines:** Desktop 5 adds ` (K archived deferred, …)` to `Loaded N persisted sessions from <folder>` and logs
+  the deferred ones on a line of their own. `verify` and the target-org lookup misread the folder whenever
+  archived sessions existed; both now read it, and `verify` adds the deferred count (and says "wait and re-run"
+  while that pass is still loading). `User logged out during account ID wait` (5.x name of a 4.x line) counts as
+  signed out.
+- **Log reading, older bugs found by the review:** sign-in lines of the same second are read in the log's order;
+  on macOS, when two or more windows share Desktop's one log, lines that name no window no longer sign another
+  window out (its cookie decides); a transitional (old account, new org) line is skipped even when its "Loaded"
+  line is a second later; `verify` counts every load since Desktop last started, so a sign-out and sign-in of the
+  same account in one launch no longer reads as MISMATCH.
+- **Scratch workspaces:** moving a session whose folder is the old account's scratch workspace now warns. Desktop
+  may delete that folder once the old account is signed in there again and it has been idle for 7 days. The old
+  note said it "still works", which is only true until then.
+- **Desktop's own importer** (Settings › Import) cannot move Code sessions between claude.ai accounts in one
+  profile (third-party mode or an admin setting only), so this tool is still the way, and the two cannot create
+  duplicates of each other.
+
+**Conversations Claude Code would delete for their age.** On the same Mac, the terminal `claude` was 2.1.119 with
+no `cleanupPeriodDays`. Claude Code before 2.1.248 deletes every conversation older than `cleanupPeriodDays` (30
+days by default) at its next start, Desktop's included, and two of the Mac's Desktop sessions had lost theirs.
+`status` (text and `--json` `retention_risk`) and `doctor` now name the conversations at risk, why, and the fix
+(raise the setting, or update Claude Code). Nothing is changed by the tool.
+- A record's earlier conversations count too, each conversation once, with one row per setting.
+- Claude Code's other desktop surfaces (`claude-desktop-3p`, Cowork's `local-agent`) are now recognised, here and in
+  CLI moves.
+- A `cleanupPeriodDays` that is not a whole number of days (`0`, `1e999`) pauses Claude Code's cleanup, so it warns
+  of nothing (it crashed before).
+- `claude --version` runs only when its answer changes the warning, and odd output from it crashes nothing.
+- **Not yet:** Claude Code 2.1.319 combines `desktopSessionCleanupPeriodDays` with `cleanupPeriodDays`, and decides
+  "Desktop" by who created or last wrote a transcript, differently from the documentation this models. The warning
+  therefore says "may delete" under that rule, and can over-warn (mechanics.md §4b, "Not yet modelled").
+
+**Docs:** SKILL.md (ownership wording, "What moves", troubleshooting), mechanics.md (§0 contract, §1 layout, §2
+log lines, §4b retention, §5a Desktop 5), `references/desktop5-fields.md`, and the guides: a later account switch
+strands the sessions again (switch-accounts.md), new messages (troubleshooting.md).
+
+**Reviewed** before release: four reviewers (validation and entries, logs and verify, retention, classification)
+reported 29 findings, each re-checked by a second reader trying to refute it, mostly with sandboxed reproductions;
+27 held and are fixed above, 2 did not hold.
+
+**Tested:** `tests/run_all.py`: session-rehome 593 checks (56 new: 7 in "Desktop conversations an older terminal
+Claude Code deletes for their age (doctor, status)", 16 in "Desktop 5 (5.11492.0, macOS): log lines, per-account
+files, imported and scratch sessions", 18 in "0.11.2 review: the Desktop 5 guards per session, --to-profile,
+rollback, adopt and the Remote Control clamps", 6 in "0.11.2 review: reading Desktop's log (shared macOS log,
+same-second order, transitional lines, verify)", 9 in "0.11.2 review: the retention warning (crashes, cost, earlier
+conversations, rows, Desktop entrypoints)"; each failed on the code before its fix, except fixture and guard
+checks), session-transporter 40 checks, repository tests.
+
 ## 0.11.1 — 2026-11-09
 
 - **A Desktop record field first seen on a real Mac** (Desktop 4.23118.0, macOS 26.6), `startedFromEnvironmentId`,

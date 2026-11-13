@@ -47,6 +47,11 @@ in any folder: [multiple-instances.md](multiple-instances.md#your-own-folders) s
 
 If it says *"no org known"*, open the Code tab once while signed in, quit, and run it again.
 
+**The sessions go to whoever is signed in when you run it.** The command line says so (`-> name@example.com`):
+check that it is the account you mean. A later switch to another account strands them again, the same way, so
+after every switch run `ccd-rehome status` and, if it shows sessions STRANDED, `rehome` again. To file them under
+an account that is not signed in right now, name it: `ccd-rehome move work --to name@example.com`.
+
 **Before it moves anything, the tool checks every file involved** against the formats it knows:
 - `ERROR`: a format changed. It refuses.
 - `DRIFT`: a newer Desktop stores something new. A real run refuses until you have looked: `--dry-run` shows what
